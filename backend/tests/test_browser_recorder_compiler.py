@@ -481,7 +481,13 @@ def test_compile_into_nodes_combines_captcha_chain_into_canonical_node():
     actions = [n["config_json"]["tool_action"] for n in nodes]
     assert actions.count("solve_captcha") == 1
     assert actions.count("click") == 0, "click should be folded into solve_captcha"
-    assert actions.count("extract") == 0, "extract should be folded into solve_captcha as success_selector"
+    # BUG-774/776: extract is now KEPT separate (matches canonical flow #33
+    # pattern: solve_captcha + wait_for + extract). Lets the user upgrade
+    # extract → execute_script for structured tracking output without
+    # losing the captcha-skill's reliability barrier.
+    assert actions.count("extract") == 1, "extract must stay as its own step"
+    assert actions.count("wait_for") == 1, "wait_for must auto-insert between captcha and extract"
+    assert actions.index("solve_captcha") < actions.index("wait_for") < actions.index("extract")
 
     captcha_node = next(n for n in nodes if n["config_json"]["tool_action"] == "solve_captcha")
     # Canonical uses `tool_arguments` (not `selectors`) with specific keys
@@ -797,3 +803,107 @@ def test_bug773_combine_captcha_picks_submit_button_not_input_click():
     children = compile_events_into_nodes(events)
     captcha_node = next(c for c in children if (c["config_json"] or {}).get("tool_action") == "solve_captcha")
     assert captcha_node["config_json"]["tool_arguments"]["submit_selector"] == "button[name=\"b-pesquisar\"]"
+
+
+def test_bug774_combine_captcha_skips_noise_extract_selector():
+    """When the recorder captures extract on a noise region (carousel)
+    because results don't render at record-time, success_selector must NOT
+    pick that up — otherwise the runtime sees a 'success' that's actually
+    pre-load carousel content."""
+    events = [
+        RecordedEvent("navigate", {"url": "https://example.com/"}),
+        RecordedEvent("fill", {
+            "selector": "input#objeto", "value": "AD468811215BR",
+            "field_meta": {"tag": "input", "id": "objeto"},
+        }),
+        RecordedEvent("marker.captcha", {
+            "selector": "img#captcha_image",
+            "meta": {"tag": "img", "id": "captcha_image"},
+        }),
+        RecordedEvent("fill", {
+            "selector": "input#captcha", "value": "XXXXXX",
+            "field_meta": {"tag": "input", "id": "captcha"},
+        }),
+        RecordedEvent("click", {
+            "selector": "button[name=\"b-pesquisar\"]",
+            "meta": {"tag": "button", "name": "b-pesquisar"},
+        }),
+        RecordedEvent("marker.extract", {
+            "selector": "div#carouselExampleControls > div > div:nth-of-type(1) > a > img",
+            "as": "delivery_status",
+        }),
+    ]
+    children = compile_events_into_nodes(events)
+    captcha_node = next(c for c in children if (c["config_json"] or {}).get("tool_action") == "solve_captcha")
+    assert "success_selector" not in captcha_node["config_json"]["tool_arguments"], \
+        "noise extract selector must not become success_selector"
+
+
+def test_bug774_combine_captcha_uses_content_region_extract_selector():
+    """When the recorder captures extract on a content-region selector
+    (.ship-steps, etc.) — that IS a valid success_selector."""
+    events = [
+        RecordedEvent("navigate", {"url": "https://example.com/"}),
+        RecordedEvent("fill", {
+            "selector": "input#objeto", "value": "AD468811215BR",
+            "field_meta": {"tag": "input", "id": "objeto"},
+        }),
+        RecordedEvent("marker.captcha", {
+            "selector": "img#captcha_image",
+            "meta": {"tag": "img", "id": "captcha_image"},
+        }),
+        RecordedEvent("fill", {
+            "selector": "input#captcha", "value": "XXXXXX",
+            "field_meta": {"tag": "input", "id": "captcha"},
+        }),
+        RecordedEvent("click", {
+            "selector": "button[name=\"b-pesquisar\"]",
+            "meta": {"tag": "button", "name": "b-pesquisar"},
+        }),
+        RecordedEvent("marker.extract", {
+            "selector": "#tabs-rastreamento .ship-steps",
+            "as": "delivery_status",
+        }),
+    ]
+    children = compile_events_into_nodes(events)
+    captcha_node = next(c for c in children if (c["config_json"] or {}).get("tool_action") == "solve_captcha")
+    assert captcha_node["config_json"]["tool_arguments"].get("success_selector") == "#tabs-rastreamento .ship-steps"
+
+
+def test_bug776_auto_inserts_wait_for_between_captcha_and_extract():
+    """If the recorder didn't capture a wait_for step, the compiler must
+    auto-insert one between the combined solve_captcha (which submits) and
+    the extract — extract races the page reload otherwise."""
+    events = [
+        RecordedEvent("navigate", {"url": "https://example.com/"}),
+        RecordedEvent("fill", {
+            "selector": "input#objeto", "value": "AD468811215BR",
+            "field_meta": {"tag": "input", "id": "objeto"},
+        }),
+        RecordedEvent("marker.captcha", {
+            "selector": "img#captcha_image",
+            "meta": {"tag": "img", "id": "captcha_image"},
+        }),
+        RecordedEvent("fill", {
+            "selector": "input#captcha", "value": "XXXXXX",
+            "field_meta": {"tag": "input", "id": "captcha"},
+        }),
+        RecordedEvent("click", {
+            "selector": "button[name=\"b-pesquisar\"]",
+            "meta": {"tag": "button", "name": "b-pesquisar"},
+        }),
+        RecordedEvent("marker.extract", {
+            "selector": "#tabs-rastreamento .ship-steps",
+            "as": "delivery_status",
+        }),
+    ]
+    children = compile_events_into_nodes(events)
+    actions = [(c["config_json"] or {}).get("tool_action") for c in children]
+    # Expected order: navigate, solve_captcha, wait_for, extract
+    captcha_pos = actions.index("solve_captcha")
+    wait_pos = actions.index("wait_for")
+    extract_pos = actions.index("extract")
+    assert captcha_pos < wait_pos < extract_pos, f"wait_for must be between captcha and extract — got actions {actions}"
+    wait_node = children[wait_pos]
+    wait_sel = (wait_node["config_json"]["selectors"][0] or {}).get("selector")
+    assert wait_sel == "#tabs-rastreamento .ship-steps"
