@@ -44,10 +44,9 @@ _SELECTOR_JS = r"""
     }
     return parts.join(' > ');
   }
-  window.__tsushinSelectorAt = (x, y) => {
-    const el = document.elementFromPoint(x, y);
-    if (!el) return null;
-    const meta = {
+  function metaOf(el) {
+    if (!el || el.nodeType !== 1) return null;
+    return {
       tag: el.tagName.toLowerCase(),
       type: el.getAttribute('type') || null,
       name: el.getAttribute('name') || null,
@@ -59,7 +58,23 @@ _SELECTOR_JS = r"""
       'data-cy': el.getAttribute('data-cy') || null,
       placeholder: el.getAttribute('placeholder') || null,
     };
-    return { selector: cssPath(el), meta };
+  }
+  window.__tsushinSelectorAt = (x, y) => {
+    const el = document.elementFromPoint(x, y);
+    if (!el) return null;
+    return { selector: cssPath(el), meta: metaOf(el) };
+  };
+  window.__tsushinFocusedSelector = () => {
+    // Resolve the currently focused element. Falls through iframes via
+    // shadowRoot when possible. Returns null when focus is on body — the
+    // recorder's input.text path treats that as "no useful selector" so
+    // the compiler can refuse to emit a body-fill row (BUG-768).
+    let el = document.activeElement;
+    while (el && el.shadowRoot && el.shadowRoot.activeElement) {
+      el = el.shadowRoot.activeElement;
+    }
+    if (!el || el === document.body || el === document.documentElement) return null;
+    return { selector: cssPath(el), meta: metaOf(el) };
   };
 })();
 """

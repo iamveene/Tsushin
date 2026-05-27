@@ -133,6 +133,9 @@ def _row_click(meta: Optional[dict], selector_hint: Optional[str]) -> dict[str, 
     return row
 
 
+_ROOT_SELECTORS = {"body", "html", "*", "document"}
+
+
 def _row_fill(payload: dict[str, Any]) -> dict[str, Any]:
     meta = payload.get("field_meta") or {}
     primary, fallback = pick_selector(meta)
@@ -140,11 +143,18 @@ def _row_fill(payload: dict[str, Any]) -> dict[str, Any]:
     # marker.vault flows where the UI provides a precise selector).
     if payload.get("selector"):
         primary = payload["selector"]
+    # BUG-768 defence in depth: a document-root selector means the relay
+    # couldn't resolve the focused element. Surface this via a marker the
+    # API layer rejects rather than silently shipping a broken row.
+    if primary and primary.strip() in _ROOT_SELECTORS:
+        primary = None
     row: dict[str, Any] = {
         "action": "fill",
         "selector": primary,
         "value": payload.get("value", ""),
     }
+    if not primary:
+        row["_needs_selector"] = True
     if fallback and fallback != primary:
         row["fallback_selector"] = fallback
     if is_password_field(meta) and not _is_vault_handle(payload.get("value")):
@@ -170,6 +180,8 @@ def _row_captcha(payload: dict[str, Any]) -> dict[str, Any]:
     primary, fallback = pick_selector(payload.get("meta") or {})
     if payload.get("selector"):
         primary = payload["selector"]
+    if primary and primary.strip() in _ROOT_SELECTORS:
+        primary = None
     row: dict[str, Any] = {
         "action": "solve_captcha",
         "selector": primary,
@@ -248,14 +260,44 @@ def _captcha_value_targets(selectors: list[dict[str, Any]]) -> None:
     captcha doesn't actually inject anywhere. The recorder picks the
     *next* `fill` row as the implicit target — matches the Correios shape
     in §2 of the research doc.
+
+    Fill rows whose selector couldn't be resolved (`_needs_selector`) are
+    skipped — they can't be a valid value_target and would compile to a
+    `body` selector at runtime (BUG-768).
     """
     for idx, row in enumerate(selectors):
         if row.get("action") != "solve_captcha":
             continue
         for j in range(idx + 1, len(selectors)):
-            if selectors[j].get("action") == "fill":
-                row["value_target"] = selectors[j].get("selector")
-                break
+            other = selectors[j]
+            if other.get("action") != "fill":
+                continue
+            target = other.get("selector")
+            if not target or target.strip() in _ROOT_SELECTORS:
+                continue
+            row["value_target"] = target
+            break
+
+
+def _dedupe_consecutive_clicks(selectors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse two consecutive identical click rows into one.
+
+    The recorder captures every mousePressed as a click event. If the user
+    re-clicks the same input (e.g. because they didn't realise focus was
+    needed, BUG-767), both clicks landed in the compiled flow as separate
+    steps. The duplicate just slows replay and confuses the StepLedger.
+    """
+    out: list[dict[str, Any]] = []
+    for row in selectors:
+        if (
+            row.get("action") == "click"
+            and out
+            and out[-1].get("action") == "click"
+            and out[-1].get("selector") == row.get("selector")
+        ):
+            continue
+        out.append(row)
+    return out
 
 
 def compile_events(events: Iterable[RecordedEvent]) -> dict[str, Any]:
@@ -331,6 +373,7 @@ def compile_events(events: Iterable[RecordedEvent]) -> dict[str, Any]:
         # event types Phase 1's relay emits.
 
     selectors = _dedupe_focus_click_then_fill(selectors)
+    selectors = _dedupe_consecutive_clicks(selectors)
     _captcha_value_targets(selectors)
 
     # Compute a reasonable timeout — sum of per-step timeouts with a

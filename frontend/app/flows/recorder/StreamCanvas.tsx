@@ -123,6 +123,12 @@ export default function StreamCanvas({
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault()
+    // BUG-767: pointerdown alone does NOT grab DOM focus in Chromium for
+    // a canvas with tabIndex=0. Without explicit focus the next keystroke
+    // goes to whatever was previously focused (URL bar, body), so the
+    // recorder drops every fill the user types. setPointerCapture handles
+    // pointer routing but not keyboard focus.
+    canvasRef.current?.focus({ preventScroll: true })
     canvasRef.current?.setPointerCapture(e.pointerId)
     const { x, y } = toViewportCoords(e.clientX, e.clientY)
 
