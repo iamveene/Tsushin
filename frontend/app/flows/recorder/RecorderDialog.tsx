@@ -81,6 +81,14 @@ export default function RecorderDialog({
   // dispatched on accept targets the correct fill row.
   const [vaultTarget, setVaultTarget] = useState<{ selector: string; rowIndex: number } | null>(null)
   const [vaultDraft, setVaultDraft] = useState<PasswordVaultReferenceValue>({})
+  // BUG-770: extract-marker prompt used to be a blocking native window.prompt
+  // — unstyled, freezes browser-automation tools, and pressing Cancel still
+  // wired the marker with the default name. Replace with an inline modal
+  // that names the captured rect and genuinely cancels on dismiss.
+  const [extractPending, setExtractPending] = useState<
+    | { x: number; y: number; width: number; height: number; name: string }
+    | null
+  >(null)
   const [agenticExpanded, setAgenticExpanded] = useState(false)
   const [agentPaused, setAgentPaused] = useState(false)
   // Derive agent-running from the event stream — the backend dispatches
@@ -203,16 +211,34 @@ export default function RecorderDialog({
   }) => {
     if (rect.kind === 'captcha') {
       send({ type: 'marker.captcha', x: rect.x, y: rect.y, width: rect.width, height: rect.height })
-    } else {
-      const asName = window.prompt('Variable name for this captured value:', 'captured_value') || 'captured_value'
-      send({
-        type: 'marker.extract',
-        x: rect.x, y: rect.y, width: rect.width, height: rect.height,
-        as: asName,
-      })
+      setMarkerMode(null)
+      return
     }
+    // Open the inline naming dialog. We exit marker mode immediately so the
+    // canvas doesn't accept another drag while the user is typing the name.
+    setExtractPending({
+      x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+      name: 'delivery_status',
+    })
     setMarkerMode(null)
   }, [send])
+
+  const handleExtractConfirm = useCallback(() => {
+    if (!extractPending) return
+    const trimmed = (extractPending.name || '').trim() || 'captured_value'
+    send({
+      type: 'marker.extract',
+      x: extractPending.x, y: extractPending.y,
+      width: extractPending.width, height: extractPending.height,
+      as: trimmed,
+    })
+    setExtractPending(null)
+  }, [extractPending, send])
+
+  const handleExtractCancel = useCallback(() => {
+    // Cancel genuinely cancels — no fallback marker fires.
+    setExtractPending(null)
+  }, [])
 
   const handleNavigate = useCallback(() => {
     const trimmed = urlInput.trim()
@@ -445,6 +471,67 @@ export default function RecorderDialog({
               </p>
             )}
             <PasswordVaultReferencePicker value={vaultDraft} onChange={setVaultDraft} />
+          </div>
+        </Modal>
+
+        {/* Extract-marker naming dialog — replaces the old window.prompt
+            (BUG-770). Pressing Cancel genuinely cancels: no marker.extract
+            is dispatched. Enter on the input submits. */}
+        <Modal
+          isOpen={!!extractPending}
+          onClose={handleExtractCancel}
+          title="Name this captured value"
+          size="md"
+          autoHeight
+          footer={
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={handleExtractCancel}
+                className="px-3 py-2 rounded-lg border border-slate-600 text-slate-300 text-xs hover:border-slate-500 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleExtractConfirm}
+                disabled={!extractPending?.name?.trim()}
+                className="px-3 py-2 rounded-lg bg-fuchsia-500 hover:bg-fuchsia-400 disabled:bg-slate-700 disabled:text-slate-500 text-slate-900 text-xs font-semibold transition-colors"
+              >
+                Capture
+              </button>
+            </div>
+          }
+        >
+          <div className="space-y-3">
+            <p className="text-xs text-slate-400">
+              The text inside the marked region will be saved as a variable. Downstream steps (
+              <code className="px-1 py-0.5 rounded bg-slate-800 text-slate-200 font-mono text-[11px]">notification</code>,{' '}
+              <code className="px-1 py-0.5 rounded bg-slate-800 text-slate-200 font-mono text-[11px]">data_transform</code>) reference it as
+              <code className="ml-1 px-1 py-0.5 rounded bg-slate-800 text-slate-200 font-mono text-[11px]">{`{{previous_step.${extractPending?.name || 'name'}}}`}</code>.
+            </p>
+            <label className="block">
+              <span className="block text-xs font-medium uppercase text-slate-400 mb-1">Variable name</span>
+              <input
+                type="text"
+                autoFocus
+                value={extractPending?.name || ''}
+                onChange={(e) =>
+                  setExtractPending((prev) => (prev ? { ...prev, name: e.target.value } : prev))
+                }
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && extractPending?.name?.trim()) {
+                    e.preventDefault()
+                    handleExtractConfirm()
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault()
+                    handleExtractCancel()
+                  }
+                }}
+                placeholder="delivery_status"
+                className="w-full px-3 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white text-sm focus:border-fuchsia-500 focus:ring-1 focus:ring-fuchsia-500 outline-none font-mono"
+              />
+            </label>
           </div>
         </Modal>
 

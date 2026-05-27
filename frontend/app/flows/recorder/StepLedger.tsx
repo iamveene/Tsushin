@@ -57,12 +57,49 @@ function summarize(row: RecorderEventRow): string {
   }
 }
 
+/**
+ * BUG-769: the WebSocket stream emits one `fill` event per typed character
+ * (Input.insertText fires per keystroke). Showing 13 rows for `AD468811215BR`
+ * is unreadable and made it hard to spot when the selector resolution
+ * actually worked. Coalesce sequential fills on the same selector into a
+ * single ledger row carrying the cumulative value — matches what the
+ * backend compiler already does in `_coalesce_fills` so what you see here
+ * is what gets compiled.
+ */
+function coalesceForDisplay(events: RecorderEventRow[]): RecorderEventRow[] {
+  const out: RecorderEventRow[] = []
+  for (const row of events) {
+    const prev = out[out.length - 1]
+    if (
+      prev &&
+      row.kind === 'fill' &&
+      prev.kind === 'fill' &&
+      (row.payload?.selector || null) === (prev.payload?.selector || null)
+    ) {
+      const merged = {
+        ...prev,
+        payload: {
+          ...prev.payload,
+          value: String(prev.payload?.value || '') + String(row.payload?.value || ''),
+          field_meta: row.payload?.field_meta || prev.payload?.field_meta,
+        },
+        ts: row.ts || prev.ts,
+      }
+      out[out.length - 1] = merged
+      continue
+    }
+    out.push(row)
+  }
+  return out
+}
+
 export default function StepLedger({ events, onClear, onVaultRequest }: StepLedgerProps) {
+  const visibleEvents = coalesceForDisplay(events)
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-          Captured steps ({events.length})
+          Captured steps ({visibleEvents.length})
         </h3>
         {onClear && events.length > 0 && (
           <button
@@ -75,12 +112,12 @@ export default function StepLedger({ events, onClear, onVaultRequest }: StepLedg
         )}
       </div>
       <div className="flex-1 overflow-y-auto p-2 space-y-1 min-h-0">
-        {events.length === 0 ? (
+        {visibleEvents.length === 0 ? (
           <p className="text-xs text-slate-500 px-2 py-4">
             Nothing recorded yet. Type a URL above and start clicking — actions appear here.
           </p>
         ) : (
-          events.map((row, index) => {
+          visibleEvents.map((row, index) => {
             const meta = KIND_LABELS[row.kind] || {
               label: row.kind,
               tone: 'bg-slate-700/30 text-slate-300 border-slate-600',
