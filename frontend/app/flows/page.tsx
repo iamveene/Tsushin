@@ -3592,6 +3592,11 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
       config: defaultConfigForStepType(stepType, lastBrowserStepUrl(steps)) as FlowStepConfig,
       allow_multi_turn: stepType === 'conversation',
       max_turns: stepType === 'conversation' ? 20 : undefined,
+      // BUG-777: notification steps observe the flow's result — they
+      // shouldn't be the thing that stops the next step (there usually
+      // isn't one anyway). Default to "continue" so the alarm always
+      // fires and never propagates its own delivery failure.
+      ...(stepType === 'notification' ? { on_failure: 'continue' as const } : {}),
     }
     onChange([...steps, newStep])
     setEditingIndex(steps.length)
@@ -3668,6 +3673,12 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
       timeout_seconds: compiled.group_node.timeout_seconds,
       allow_multi_turn: false,
     }
+    // BUG-777: every recorder-built browser leg should default to
+    // on_failure='continue' so an extract-time selector miss (or any
+    // single bad step) doesn't silently swallow the trailing
+    // notification. Per project convention (user-guide §9), the loop
+    // is observed via the notification — failing silently is worse
+    // than reporting a partial result.
     const children: CreateFlowStepData[] = compiled.child_nodes.map((c, i) => ({
       name: c.name,
       type: 'browser_automation' as StepType,
@@ -3675,6 +3686,7 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
       config: c.config_json as FlowStepConfig,
       timeout_seconds: c.timeout_seconds,
       allow_multi_turn: false,
+      on_failure: 'continue',
     }))
     onChange([...steps, parent, ...children])
     setShowAddStep(false)

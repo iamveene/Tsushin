@@ -704,11 +704,65 @@ def _combine_captcha_chain(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
          if (nodes[i].get("config_json") or {}).get("tool_action") == "extract"),
         None,
     )
-    result_sel = None
+    extract_sel = None
     if extract_idx is not None:
         ext_sels = nodes[extract_idx]["config_json"].get("selectors") or []
         if ext_sels:
-            result_sel = ext_sels[0].get("selector")
+            extract_sel = ext_sels[0].get("selector")
+
+    # BUG-774: previously we passed whatever the recorder captured as the
+    # extract selector (often a noise region like the carousel image because
+    # results don't render at record-time on captcha-gated sites) as
+    # success_selector. At runtime that selector matches immediately —
+    # before the real results have loaded — and the captcha skill exits
+    # before the page settles. Restrict success_selector to selectors that
+    # look like content regions; otherwise leave it unset and let the
+    # subsequent wait_for step (auto-inserted below if missing) gate things.
+    def _looks_like_result_region(sel: str) -> bool:
+        s = (sel or "").lower()
+        if not s:
+            return False
+        for keyword in (
+            "ship-step", "ship_step", "result", "tracking",
+            "rastreamento", "evento", "events", "timeline",
+            "status-list", "history",
+        ):
+            if keyword in s:
+                return True
+        return False
+
+    result_sel = extract_sel if _looks_like_result_region(extract_sel or "") else None
+
+    # BUG-776: if the recorder didn't capture a wait_for step between
+    # submit and extract, insert one targeting the extract's selector
+    # (when it's content-like) — without it the runtime's extract races
+    # the page reload that the captcha submission triggers and pulls
+    # empty/wrong content.
+    wait_for_node: Optional[dict[str, Any]] = None
+    has_wait_between = False
+    if extract_idx is not None:
+        for i in range(submit_idx + 1, extract_idx):
+            if (nodes[i].get("config_json") or {}).get("tool_action") in ("wait_for", "wait_for_url"):
+                has_wait_between = True
+                break
+        if not has_wait_between and _looks_like_result_region(extract_sel or ""):
+            wait_cfg = _node_base(
+                (cfg_captcha.get("browser_session_profile_name") or ""),
+                "wait_for",
+                timeout=30,
+            )
+            wait_cfg["selectors"] = [{
+                "action": "wait_for",
+                "selector": extract_sel,
+                "state": "visible",
+                "timeout_ms": 30000,
+            }]
+            wait_for_node = {
+                "name": "wait_tracking_result",
+                "type": "browser_automation",
+                "config_json": wait_cfg,
+                "timeout_seconds": 30,
+            }
 
     # Canonical solve_captcha uses `tool_arguments` (not `selectors`) with
     # the specific keys the BrowserAutomationSkill expects:
@@ -762,14 +816,16 @@ def _combine_captcha_chain(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
         },
     }
 
-    # Remove the captcha, click, and (if present) extract nodes; insert combined
+    # Remove the captcha, click, and (if present) extract nodes; insert combined.
+    # BUG-776: keep the extract step separately so we can interpose a wait_for
+    # between the combined solve_captcha (which submits) and the extract.
     drop_indices = {captcha_idx, submit_idx}
-    if extract_idx is not None:
-        drop_indices.add(extract_idx)
     kept = [n for i, n in enumerate(nodes) if i not in drop_indices]
-    # Insert at the captcha's original position
     insert_pos = sum(1 for i in range(captcha_idx) if i not in drop_indices)
-    kept.insert(insert_pos, combined)
+    insert_items: list[dict[str, Any]] = [combined]
+    if wait_for_node is not None:
+        insert_items.append(wait_for_node)
+    kept[insert_pos:insert_pos] = insert_items
     return kept
 
 
