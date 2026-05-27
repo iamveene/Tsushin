@@ -60,7 +60,7 @@ Source: `README.md`, `backend/settings.py`, and the README version badge.
 | **Application developers** | Public API v1 reference, OAuth2 client-credentials + direct API-key auth, rate limiting, webhook integration. |
 | **Security engineers** | Sentinel profiles, permission scopes, HMAC-signed webhooks, envelope-encrypted secrets, docker-socket-proxy isolation. |
 
-Version under documentation: **v0.7.0** in both the README and `backend/settings.py` (`SERVICE_VERSION = "0.7.0"`). The v0.7.x patch series adds the IA reshape (Watcher 11→7 tabs, Studio Continuous Agents tab, Create Chooser modal), auto-flow editor surfacing, financial-flow notification states, ASR runtime resilience, LID matcher polish, Cloudflared sidecar opt-out, UI audit API-boundary hardening, and additional bug fixes — all tracked under "Unreleased" in `docs/changelog.md` until rolled into the next tagged release.
+Version under documentation: **v0.7.0** in both the README and `backend/settings.py` (`SERVICE_VERSION = "0.7.0"`). The v0.7.x patch series adds the IA reshape (Watcher 11→7 tabs, Studio Continuous Agents tab, Create Chooser modal), auto-flow editor surfacing, ASR runtime resilience, LID matcher polish, Cloudflared sidecar opt-out, UI audit API-boundary hardening, removal of the legacy finan-migration nodes (`record_store`, `financial_record_store`, `financial_bill_store`), and additional bug fixes — all tracked under "Unreleased" in `docs/changelog.md` until rolled into the next tagged release.
 
 ---
 
@@ -1926,7 +1926,7 @@ Step handlers registered in `FlowEngine.handlers` (Source: `backend/flows/flow_e
 | Type | Handler | Notes |
 |---|---|---|
 | `source` | `SourceStepHandler` | Trigger-owned entry step for triggered flows. Auto-generated from the selected Hub trigger, locked at position 1, not manually addable. |
-| `notification` | `NotificationStepHandler` | Sends a notification message to a recipient. Requires `recipient` or `recipients`, plus `message_template` or `content` in `config_json`. v0.7.x supports `message_templates_by_state` keyed off an upstream `notification_state` (financial flows). |
+| `notification` | `NotificationStepHandler` | Sends a notification message to a recipient. Requires `recipient` or `recipients`, plus `message_template` or `content` in `config_json`. Supports `message_templates_by_state` keyed off an upstream `notification_state`. |
 | `message` | `MessageStepHandler` | Sends a chat message (single-turn). |
 | `tool` | `ToolStepHandler` | Invokes a tool/function (built-in tool, sandboxed tool, or skill in tool mode). |
 | `conversation` | `ConversationStepHandler` | Multi-turn AI conversation via `ConversationThread` (up to `max_turns`). On system-managed (auto-generated from a trigger) flows the Default-agent step hides outbound-message fields. |
@@ -1938,13 +1938,11 @@ Step handlers registered in `FlowEngine.handlers` (Source: `backend/flows/flow_e
 | `browser_automation` | `BrowserAutomationStepHandler` | Browser control (navigate/screenshot/click/fill/extract). |
 | `password_vault` | `PasswordVaultStepHandler` | Programmatic vault reference resolution. Requires a tenant-scoped Hub Password Vault integration and stores only redacted output/handles in flow-run persistence. |
 | `http_request` | `HttpRequestStepHandler` | UI-authored HTTP primitive — editable method, URL, headers, body, secret references. |
-| `data_transform` | `DataTransformStepHandler` | Deterministic field extraction and normalization on previous-step outputs. |
-| `financial_record_store` | `FinancialRecordStoreStepHandler` | Generic financial record storage primitive. Emits `notification_state` (`new_boleto`, `barcode_changed`, `pending_no_barcode`, `paid`, etc.) for downstream gates/notifications. |
-| `financial_bill_store` | `FinancialBillStoreStepHandler` | Utility-bill-specific storage alias of Financial Record Store. |
-| `Trigger`, `Subflow` + PascalCase aliases | Legacy handlers | Backward compat for old flows (`Trigger`, `Subflow`, `Source`, `Message`, `Tool`, `Conversation`, `SlashCommand`, `Summarization`, `Gate`, `BrowserAutomation`, `HttpRequest`, `DataTransform`, `FinancialRecordStore`, `FinancialBillStore`). |
+| `data_transform` | `DataTransformStepHandler` | Deterministic field extraction and normalization on previous-step outputs (`json_path`, `extract_fields`, `record_mapping`). |
+| `Trigger`, `Subflow` + PascalCase aliases | Legacy handlers | Backward compat for old flows (`Trigger`, `Subflow`, `Source`, `Message`, `Tool`, `Conversation`, `SlashCommand`, `Summarization`, `Gate`, `BrowserAutomation`, `HttpRequest`, `DataTransform`). |
 | `AgentNode` | `ConversationStepHandler` alias | Alias accepted for compatibility (same config as `conversation`). |
 
-**Removed in v0.7.x (2026-05-07):** the opaque `financial_utility_automation` step type ("Legacy Utility Bill" in the palette), its frontend templates, config panel, backend handler, and the three site-specific runners (`run_moderna_condominio`, `run_consigaz_sao_blas`, `run_medsenior_samedil`) along with their `_extract_*` helpers and login URLs. The 6 migrated `Finan | …` flows already use only generic primitives; a DB audit confirmed zero remaining flow nodes referenced the legacy type before deletion. Operator-private template profiles and browser playbooks moved to `.private/` (gitignored), env-overridable via `TSN_FINAN_PLAYBOOK_DIR` and `TSN_FINAN_PROFILES_PATH`.
+**Removed step types (finan-migration cleanup, v0.7.x):** the opaque `financial_utility_automation` step and its three site-specific runners (`run_moderna_condominio`, `run_consigaz_sao_blas`, `run_medsenior_samedil`) were removed in May 2026. The follow-up cleanup (this release) removed the bespoke nodes that the finan migration had also added on top of generic primitives: `record_store`, `financial_record_store`, `financial_bill_store`, plus the `financial_parser` mode of `data_transform`, the notification-state classifier for utility bills, the `FinancialUtilityBill` / `FinancialAutomationRecord` tables (alembic 0101), and the `.private/finan_profiles.json` / `.private/finan_playbooks/` operator catalog. Notification still supports the generic `notification_state` switch, but the state classifier and its boleto-specific states are no longer in the engine.
 
 Each `flow_node` row carries (Source: `models.py:1586-1639`):
 
@@ -2004,53 +2002,9 @@ Flows can resolve Password Vault references through three UI-created paths:
 
 The persisted Flow output is always redacted. Field/TOTP reads require the selected Hub Password Vault integration to allow those reads; otherwise the step fails closed with an explicit error. Notification nodes can use the redacted status/metadata for conditional messages without embedding plaintext secrets.
 
-#### Financial utility automation steps
+#### CAPTCHA boundaries
 
-The Flow editor exposes UI-first primitives for financial migrations: `Password Vault`, `Browser Automation`, `HTTP Request`, `Data Transform`, `Financial Record Store`, `Utility Bill Store`, `Gate`, and `Notification`. The legacy `financial_utility_automation` / `Utility Bill` step type was **removed in v0.7.x (2026-05-07)** along with its frontend templates, config panel, backend handler, and three site-specific runners. The 6 migrated `Finan | …` flows already use only generic primitives, so the legacy type is no longer needed.
-
-The acceptance bar is manual UI reconstruction, not backend import. A normal operator must be able to recreate every active source flow from a redacted manifest by using only Flows UI controls. A future JSON import/export feature may speed up migration, clone, and backup workflows, but it is a convenience feature and must not be treated as the workaround for missing Flow editor affordances.
-
-v0.7.x ships an initial financial template catalog that expands into visible nodes, not a hidden automation wrapper:
-
-Operator-private template profiles live in `.private/finan_profiles.json` and the corresponding browser playbook JSONs live under `.private/finan_playbooks/` (both gitignored). The expected shape of a profile entry plus the keys consumed by template seeding are documented in `services/flow_template_seeding.py`. Override the locations with `TSN_FINAN_PROFILES_PATH` and `TSN_FINAN_PLAYBOOK_DIR`. A clone without those files boots cleanly with zero Finan templates registered.
-
-Financial templates inflate the corresponding playbook steps into visible Flow nodes — never an opaque runner. Browser work is split into editable, operator-readable actions such as navigate, fill username, fill password or TOTP from Password Vault, click submit, wait for selector, wait for URL, dismiss modal, CAPTCHA/manual handoff boundary, extract fields, and capture evidence. The UI should present these as understandable sequence steps with labels, pickers, toggles, and validation, not as raw JSON, code-first selectors, or programming-like node blobs. Provider bootstrap secrets are separate Password Vault steps, not literals inside template JSON.
-
-For image CAPTCHA boundaries, `browser_automation.solve_captcha` remains a generic primitive: site-specific image, input, submit, success selector, retry, and solver settings live in the step config. CAPTCHA configs can use `solver_provider="ollama"` for local multimodal models or `solver_provider="gemini"` for the tenant's configured Gemini provider instance. Exact-length sites can set `captcha_length`; variable-length sites can set `captcha_min_length` and `captcha_max_length`. Ollama-backed configs can also bound generation with `solver_timeout_seconds`, `num_predict`, `num_ctx`, `top_p`, `repeat_penalty`, and `ollama_keep_alive`, which is important for CPU-only production hosts where an unbounded multimodal response can tie up the runner. The Browser Automation editor presents selector/action rows and tool arguments as repeatable responsive cards, while Flow step headers wrap long names and badges, so long selectors, fallbacks, scripts, and node labels stay editable without raw JSON or cramped modal overflow.
-
-Storage primitives persist tenant-scoped state only. Utility bills upsert `financial_utility_bill` rows keyed by `(tenant_id, provider, unit_id, reference_month)` with encrypted boleto/barcode data; generic records upsert `financial_automation_record` rows keyed by a deterministic dedupe key. Flow outputs expose redacted previews and notification conditions, while raw browser/API payloads are passed through short-lived handles for trusted downstream parsing.
-
-A migrated financial workflow is accepted only when a normal operator can create and edit it from a blank Flow using visible primitive nodes:
-
-1. Vault credential: a Password Vault step or built-in `password_vault` Tool step that selects the 1Password reference through the picker.
-2. HTTP/browser automation: explicit `HTTP Request` nodes or Browser Automation action nodes that sign in or fetch the source page/API using the vault output.
-3. Extraction/transform: a visible `Data Transform` step that parses the fetched payload/page into amount, due date, payer/unit, status, reference period, and barcode metadata.
-4. Storage/dedupe: a visible `Utility Bill Store` or `Financial Record Store` step that writes local tenant-scoped state and uses a deterministic key such as provider, unit, and reference period to suppress duplicates.
-5. Gate: a visible Gate step that decides whether the bill is new/changed/unpaid and notification-worthy.
-6. Notification: a visible Notification step that emits only redacted metadata and only when the Gate permits delivery.
-
-For cross-environment replication, each source field in the redacted manifest must map to a visible Flow UI control. This includes schedule and recurrence, trigger/source binding, agent/provider choices, integration references, browser session profile, HTTP method/URL/headers/body, Browser Automation sequence actions, extraction rules, storage/dedupe keys, gate mode/conditions, notification channel/recipient/template, retry/failure behavior, and node ordering. If any field can only be reproduced through API/DB writes or raw import, log a product bug with the exact missing UI control.
-
-The same acceptance bar applies to non-financial portal monitors such as shipment tracking. A portable Flow profile should keep the provider name, subject key, selectors, CAPTCHA configuration, result selector, DOM extraction script/rules, storage key fields, Gate conditions, and Notification target in ordinary step config so another tenant can recreate or adapt the flow from the UI without an opaque runner.
-
-Acceptance for each migrated financial workflow requires all of the following evidence:
-
-1. UI recreation from scratch in Flows, with each primitive node editable and saved through the UI; JSON import/export is optional future capability, not acceptance evidence.
-2. A manual run from the Flow list/editor.
-3. Local state update after the first run.
-4. A second manual run against the same bill proving dedupe/no duplicate state or duplicate notification.
-5. Conditional notification validation for both paths: notify when a new or changed unpaid bill is detected with delivery configured, and skip when unchanged, paid/quitado, or missing a valid recipient.
-
-Operator-private validation evidence (active flow IDs, run history, abort/handoff notes for providers that did not graduate) lives in `.private/` and is not tracked in this repo. The `2026-05-07` audit confirmed: zero remaining `financial_utility_automation` nodes in the live DB, all migrated flows green on second-run dedupe, regression tests for `_upsert_bill` and `store_financial_record` pinned in `tests/test_financial_record_dedupe.py`.
-
-New-user runbook:
-
-1. Open Hub → Tool APIs → Password Vault, add the 1Password service-account connection, set vault/item/field allowlists as needed, enable only the required runtime permissions, and use Test before saving.
-2. Attach the Password Vault skill to any agent that will resolve secrets agentically; select the same Hub integration and capability toggles from the Skills UI or from the guided Agent Wizard's Skills step.
-3. Open Flows → From Template for the supported financial catalog, or Flows → New Flow when composing manually. Templates must expand into visible primitive nodes; Advanced options may hold technical overrides such as browser session profile, unit key, asset label, and timezone, but every override needed to reproduce the source flow must still be available through the UI.
-4. Use the Variable Reference panel to pass only redacted or derived values between nodes; do not paste plaintext secrets or full boleto barcodes into prompts or notification templates.
-5. Save, manually run, inspect the run modal and local state, then run again to prove dedupe.
-6. Edit the workflow from the Flow editor when credentials, selectors, extraction fields, storage keys, gates, or notification recipients change.
+For image CAPTCHA boundaries, `browser_automation.solve_captcha` is a generic primitive: site-specific image, input, submit, success selector, retry, and solver settings live in the step config. CAPTCHA configs can use `solver_provider="ollama"` for local multimodal models or `solver_provider="gemini"` for the tenant's configured Gemini provider instance. Exact-length sites can set `captcha_length`; variable-length sites can set `captcha_min_length` and `captcha_max_length`. Ollama-backed configs can also bound generation with `solver_timeout_seconds`, `num_predict`, `num_ctx`, `top_p`, `repeat_penalty`, and `ollama_keep_alive`, which is important for CPU-only production hosts where an unbounded multimodal response can tie up the runner. The Browser Automation editor presents selector/action rows and tool arguments as repeatable responsive cards, while Flow step headers wrap long names and badges, so long selectors, fallbacks, scripts, and node labels stay editable without raw JSON or cramped modal overflow.
 
 #### Trigger-generated flow badge
 
@@ -2292,15 +2246,9 @@ The full saved FlowDefinition is `browser_automation → notification`:
 - Agentic mode requires installing `browser-use` from `requirements-optional.txt`. The install pins down `anthropic`, `openai`, `aiohttp`, `pydantic` etc. — verified safe on Tsushin v0.7.x but worth re-validating on major upstream releases.
 - Recorder sessions are in-memory only. Process restart loses any open recordings; the janitor reaps stale sessions but persistence is not a goal.
 
-### 13.8 Financial flow notification state classifier (2026-05-06)
+### 13.8 Notification state routing
 
-`FinancialBillStoreStepHandler` now emits a `notification_state` (`new_boleto`, `barcode_changed`, `pending_no_barcode`, `no_pending_bills`, `paid`, `unchanged`, `error`) at top level and inside `conditions`. The previous `should_notify` boolean is kept for backward compatibility but is now derived from the rich state (`new_boleto | barcode_changed | pending_no_barcode` notify by default).
-
-`GateStepHandler` supports `in` / `not_in` operators on list values so flows can route on a configurable set of states. `NotificationStepHandler` accepts a `message_templates_by_state` config — when present, the handler picks the template whose key matches the upstream `notification_state` (with `default` and `message_template` fallbacks). Existing single-template flows continue to work unchanged.
-
-Seeded financial flow templates (Cond. São Blas, Consigaz, Medsenior/Samedil, Cypreste/Superlogica, EDP) ship with friendly defaults for each state. Existing tenants can apply the upgrade to active flows with `backend/scripts/upgrade_financial_flow_state_gates.py` (idempotent, dry-run aware) which rewrites legacy seeded financial flow gates to the `notification_state in [...]` shape and adds `message_templates_by_state` to their notification step.
-
-Test coverage: 13 unit + integration tests covering all 7 state branches, the `in`/`not_in` gate operators, and state-template selection (including default-key fallback and unknown-state fallback).
+`GateStepHandler` supports `in` / `not_in` operators on list values so flows can route on a configurable set of states. `NotificationStepHandler` accepts a `message_templates_by_state` config — when present, the handler picks the template whose key matches an upstream `notification_state` value (with `default` and `message_template` fallbacks). Existing single-template flows continue to work unchanged. Any step can emit a `notification_state` string in its output to drive this — the engine no longer ships a domain-specific classifier (the boleto-specific classifier was retired with the finan-migration cleanup).
 
 ---
 
@@ -3749,7 +3697,7 @@ GitLab is a polymorphic subclass of `HubIntegration` that provides GitLab.com re
 
 Password Vault is a provider-neutral Hub Tool API integration. v0.7.x ships 1Password as the first provider, using a service account token stored encrypted with the API-key encryption key. The backend runtime image includes the official `op` CLI binary from the `1password/op:2` Docker image.
 
-Operational setup is UI-first: tenants add, test, edit, and rotate 1Password service-account connections from Hub → Tool APIs → Password Vault. New financial workflows should reference this connection through Flow/Skill pickers and visible primitive Flow nodes, not through hidden backend config or opaque automation-only steps.
+Operational setup is UI-first: tenants add, test, edit, and rotate 1Password service-account connections from Hub → Tool APIs → Password Vault. Flows reference this connection through Flow/Skill pickers and visible primitive Flow nodes, not through hidden backend config.
 
 Global admins can browse and operate existing tenant-scoped Password Vault connections from the same Hub card. Regular tenant users are filtered to their own tenant, and new connection creation still requires a concrete tenant context so vault secrets are never created as unscoped global resources.
 
@@ -3778,7 +3726,7 @@ Global admins can browse and operate existing tenant-scoped Password Vault conne
 | `GET /api/hub/password-vault-integrations/{id}/items?vault=...` | Lists item metadata for a vault. |
 | `POST /api/hub/password-vault-integrations/{id}/item-test` | Tests an item, field, TOTP, or `op://vault/item/field` reference. Returns redacted output. |
 
-Agents bind this integration through Studio → Agent → Skills → Password Vault. Flow authors can also use the programmatic Password Vault step or built-in `password_vault` tool step; see §13.4. For financial workflow migrations, that visible vault credential step is required before downstream HTTP/browser automation, extraction/transform, storage/dedupe, gate, and notification steps.
+Agents bind this integration through Studio → Agent → Skills → Password Vault. Flow authors can also use the programmatic Password Vault step or built-in `password_vault` tool step; see §13.4.
 
 ### 20.5 Browser Automation (Playwright, CDP)
 

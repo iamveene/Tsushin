@@ -250,48 +250,70 @@ def test_flow_step_config_preserves_password_vault_picker_metadata():
 
 
 def test_legacy_financial_utility_automation_step_is_removed():
-    """Guardrail: the opaque provider-dispatch step must stay deleted."""
+    """Guardrail: the opaque provider-dispatch step and the finan migration
+    nodes (record_store / financial_record_store / financial_bill_store) must
+    stay deleted. Their removal was the goal of the finan-migration cleanup."""
     schemas = _import_any("schemas")
     step_type = _get_attr_any(schemas, "StepType")
     assert not hasattr(step_type, "FINANCIAL_UTILITY_AUTOMATION")
+    assert not hasattr(step_type, "FINANCIAL_RECORD_STORE")
+    assert not hasattr(step_type, "FINANCIAL_BILL_STORE")
+    assert not hasattr(step_type, "RECORD_STORE")
     source = (BACKEND_ROOT / "flows" / "flow_engine.py").read_text(encoding="utf-8")
     assert "FinancialUtilityAutomationStepHandler" not in source
+    assert "FinancialRecordStoreStepHandler" not in source
+    assert "FinancialBillStoreStepHandler" not in source
     assert '"financial_utility_automation"' not in source
+    assert '"financial_record_store"' not in source
+    assert '"financial_bill_store"' not in source
+    assert '"record_store"' not in source
     assert "run_moderna_condominio" not in source
     assert "run_consigaz_sao_blas" not in source
     assert "run_medsenior_samedil" not in source
+    services_dir = BACKEND_ROOT / "services"
+    assert not (services_dir / "financial_automation_service.py").exists()
 
 
-def test_flow_engine_registers_ui_first_financial_primitives():
+def test_flow_step_config_has_no_finan_migration_fields():
+    """Guardrail: FlowStepConfig must not re-grow the finan-migration field
+    set. The cleanup deleted ~50 fields scattered across financial_*, record_*,
+    emit_*_handle, parser_mode, and raw_bill_handle. If a future change adds
+    any of these back, this test fails and the diff author can decide whether
+    it's a real schema need or accidental re-pollution."""
     schemas = _import_any("schemas")
-    step_type = _get_attr_any(schemas, "StepType")
     config_cls = _get_attr_any(schemas, "FlowStepConfig")
-    source = (BACKEND_ROOT / "flows" / "flow_engine.py").read_text(encoding="utf-8")
+    field_names = set(config_cls.model_fields.keys())
+    forbidden = {
+        "financial_provider", "financial_unit_id", "financial_asset",
+        "financial_address", "financial_automation_key", "financial_automation_template",
+        "financial_parser_mode", "financial_record_kind", "financial_record",
+        "financial_record_handle", "financial_record_source_step",
+        "financial_record_dedupe_key", "financial_record_payload",
+        "financial_source_step", "financial_dedupe_key", "financial_bill",
+        "financial_bill_handle", "financial_bill_source_step",
+        "record_kind", "record_provider", "record_unit", "record_asset",
+        "record_address", "record_automation_key", "record_source_step",
+        "record_dedupe_key",
+        "emit_record_handle", "emit_raw_handle",
+        "emit_raw_bill_handle", "emit_financial_record_handle",
+        "parser_mode", "raw_bill_handle", "issue_record_handle",
+    }
+    leaked = field_names & forbidden
+    assert not leaked, f"FlowStepConfig regained finan-migration fields: {sorted(leaked)}"
 
-    assert step_type.HTTP_REQUEST.value == "http_request"
-    assert step_type.DATA_TRANSFORM.value == "data_transform"
-    assert step_type.FINANCIAL_RECORD_STORE.value == "financial_record_store"
-    assert step_type.FINANCIAL_BILL_STORE.value == "financial_bill_store"
-    assert '"http_request": HttpRequestStepHandler' in source
-    assert '"data_transform": DataTransformStepHandler' in source
-    assert '"financial_record_store": FinancialRecordStoreStepHandler' in source
-    assert '"financial_bill_store": FinancialBillStoreStepHandler' in source
 
-    dumped = config_cls(
-        http_method="POST",
-        http_url="https://example.invalid/api",
-        http_headers=[{"key": "Authorization", "value": "{{vault.secret_handle}}"}],
-        transform_mode="financial_parser",
-        financial_parser_mode="consigaz_utility_bill",
-        source_steps={"boleto": "step_2", "nota": "step_3"},
-        record_kind="tax_obligation",
-        financial_record_source_step="parsed_tax",
-        financial_dedupe_key="{{provider}}:{{asset}}:{{period_key}}",
-    ).model_dump()
-
-    assert dumped["http_method"] == "POST"
-    assert dumped["financial_parser_mode"] == "consigaz_utility_bill"
-    assert dumped["record_kind"] == "tax_obligation"
+def test_flow_templates_catalog_excludes_finan_templates():
+    """Guardrail: the flow template catalog must not re-grow `Finan | …` or
+    `financial_*` template ids. The dynamic registration from
+    `.private/finan_profiles.json` was deleted in the finan-migration cleanup."""
+    seeding = _import_any("services.flow_template_seeding")
+    templates = seeding.list_templates()
+    ids = [t.id for t in templates]
+    names = [t.name for t in templates]
+    finan_ids = [tid for tid in ids if tid.startswith("financial_")]
+    finan_names = [n for n in names if n.startswith("Finan |") or n.startswith("Finan|")]
+    assert not finan_ids, f"Template catalog regained financial_* ids: {finan_ids}"
+    assert not finan_names, f"Template catalog regained 'Finan | …' templates: {finan_names}"
 
 
 def test_gate_skip_condition_is_not_reported_as_failed_step():
@@ -306,97 +328,6 @@ def test_gate_skip_condition_is_not_reported_as_failed_step():
     assert '"upstream gate requested skip_remaining_steps"' in source
     assert 'sr.status in ("completed", "skipped")' in source
     assert '"steps_skipped"' in source
-
-
-def test_financial_templates_expand_to_visible_ui_first_nodes():
-    templates_module = _import_any("services.flow_template_seeding")
-    schemas = _import_any("schemas")
-    step_type = _get_attr_any(schemas, "StepType")
-
-    templates = [
-        template for template in templates_module.list_templates()
-        if template.id.startswith("financial_")
-    ]
-
-    template_ids = {template.id for template in templates}
-    assert template_ids == {
-        "financial_cond_sao_blas_boleto",
-        "financial_consigaz_sao_blas",
-        "financial_medsenior_samedil_mae",
-        "financial_cypreste_superlogica",
-        "financial_edp_es",
-    }
-    assert "financial_detran_es_ipva" not in template_ids
-    assert "financial_b3_investidor" not in template_ids
-    assert "financial_pmvv_iptu" not in template_ids
-    assert "financial_husky_transfers" not in template_ids
-    assert templates_module.FINANCIAL_PROFILES["husky_transfers"]["template_enabled"] is False
-    for template in templates:
-        flow = template.build(
-            {
-                "name": template.name,
-                "agent_id": 1,
-                "channel": "whatsapp",
-                "recipient": "+5511999999999",
-                "password_vault_integration_id": 17,
-                "vault": "FinanApp",
-            },
-            "tenant-a",
-        )
-        step_values = [step.type.value if hasattr(step.type, "value") else step.type for step in flow.steps]
-        assert "financial_utility_automation" not in step_values
-        assert step_values[:2] == [step_type.PASSWORD_VAULT.value, step_type.PASSWORD_VAULT.value]
-        assert step_type.DATA_TRANSFORM.value in step_values
-        assert step_type.GATE.value in step_values
-        assert step_type.NOTIFICATION.value in step_values
-
-        browser_steps = [step for step in flow.steps if step.type == step_type.BROWSER_AUTOMATION]
-        dumped_flow = json.dumps(flow.model_dump(), default=str)
-        assert len(browser_steps) >= 6
-        assert all(step.config.use_tool_mode for step in browser_steps)
-        assert all(step.config.tool_action for step in browser_steps)
-        assert all("example" not in (step.config.url or "") for step in browser_steps)
-        assert not re.search(r"Basic\s+[A-Za-z0-9+/=]{12,}", dumped_flow)
-        assert "{{credentials." not in dumped_flow
-        if "__codexTemplateContext" in dumped_flow:
-            assert any(step.name.startswith("context_") for step in browser_steps)
-        if template.id != "financial_consigaz_sao_blas":
-            assert any(step.config.tool_action in {"wait_for", "wait_for_url"} for step in browser_steps)
-        else:
-            basic_auth_step = next(step for step in flow.steps if step.name == "vault_basic_auth")
-            assert basic_auth_step.config.action == "compose_basic_auth"
-            assert basic_auth_step.config.username_handle == "{{vault_username.secret_handle}}"
-            assert basic_auth_step.config.password_handle == "{{vault_password.secret_handle}}"
-            vault_field_names = [
-                step.config.field_name
-                for step in flow.steps
-                if step.type == step_type.PASSWORD_VAULT and step.config.field_name
-            ]
-            assert "username" in vault_field_names
-            assert "Codigo_Client" in vault_field_names
-        assert any(step.config.tool_action in {"extract", "execute_script"} for step in browser_steps)
-        if template.id == "financial_medsenior_samedil_mae":
-            optional_steps = [step for step in browser_steps if step.on_failure == "continue"]
-            assert optional_steps
-            assert all(step.config.optional is True for step in optional_steps)
-            assert all(step.config.treat_failure_as_skipped is True for step in optional_steps)
-        if template.id == "financial_edp_es":
-            vault_field_names = [
-                step.config.field_name
-                for step in flow.steps
-                if step.type == step_type.PASSWORD_VAULT and step.config.field_name
-            ]
-            assert "cpf" in vault_field_names
-            gate_step = next(step for step in flow.steps if step.type == step_type.GATE)
-            assert gate_step.config.gate_conditions == [
-                {
-                    "field": "conditions.notification_state",
-                    "operator": "in",
-                    "value": ["new_boleto", "barcode_changed", "pending_no_barcode"],
-                },
-            ]
-        transform_step = next(step for step in flow.steps if step.type == step_type.DATA_TRANSFORM)
-        assert transform_step.config.extraction_rules or transform_step.config.financial_parser_mode
 
 
 def test_browser_automation_uses_explicit_selector_actions_and_redacts_secret_handles(monkeypatch):
@@ -820,340 +751,6 @@ def test_password_vault_compose_basic_auth_uses_handles_and_persists_only_handle
     assert "Y2xpZW50LXVzZXI" not in persisted
 
 
-def test_data_transform_consigaz_parser_returns_redacted_preview_and_raw_bill_handle():
-    flow_module = _import_any("flows.flow_engine")
-    handler_cls = _get_attr_any(flow_module, "DataTransformStepHandler")
-    from services.password_vault_service import SecretHandleRegistry
-
-    boleto_json = {
-        "dsRetorno": {
-            "tt-cliente-retorno": [
-                {
-                    "cod_tit_acr": "B123",
-                    "situacao_pagto": "Aberto",
-                    "tt-dados-gerais": [
-                        {
-                            "vencimento": "10/05/2026",
-                            "referencia": "05/2026",
-                            "valor-total": "123,45",
-                            "linha-digitavel": LONG_BARCODE,
-                        }
-                    ],
-                }
-            ]
-        }
-    }
-    boleto_handle = SecretHandleRegistry.issue(
-        json.dumps({"status_code": 200, "json": boleto_json, "body": json.dumps(boleto_json)}),
-        {"kind": "http_response"},
-    )["secret_handle"]
-    nota_handle = SecretHandleRegistry.issue(
-        json.dumps({"status_code": 200, "json": {}, "body": "{}"}),
-        {"kind": "http_response"},
-    )["secret_handle"]
-
-    handler = handler_cls(db=SimpleNamespace(), mcp_sender=SimpleNamespace())
-    output = asyncio.run(
-        handler.execute(
-            SimpleNamespace(
-                id=11,
-                timeout_seconds=30,
-                config_json=json.dumps(
-                    {
-                        "financial_parser_mode": "consigaz_utility_bill",
-                        "source_steps": {
-                            "boleto_json": "boleto_response",
-                            "nota_json": "nota_response",
-                        },
-                        "financial_unit_id": "UNIT-A",
-                        "emit_raw_bill_handle": True,
-                    }
-                ),
-            ),
-            {
-                "boleto_response": {"raw_response_handle": boleto_handle},
-                "nota_response": {"raw_response_handle": nota_handle},
-            },
-            SimpleNamespace(id=99, tenant_id="tenant-a"),
-            SimpleNamespace(id=1002),
-        )
-    )
-
-    assert output["status"] == "completed"
-    assert output["record_kind"] == "utility_bill"
-    assert output["raw_bill_handle"].startswith("pvh_")
-    assert output["conditions"]["has_barcode"] is True
-    assert LONG_BARCODE not in json.dumps(output, sort_keys=True)
-
-    raw_bill = json.loads(SecretHandleRegistry.resolve(output["raw_bill_handle"]))
-    assert raw_bill["barcode"] == LONG_BARCODE
-    assert raw_bill["provider"] == "consigaz"
-
-
-def test_financial_bill_store_persists_utility_bill_without_hidden_notification(monkeypatch):
-    flow_module = _import_any("flows.flow_engine")
-    handler_cls = _get_attr_any(flow_module, "FinancialBillStoreStepHandler")
-    from services.password_vault_service import SecretHandleRegistry
-    import services.financial_automation_service as financial_service
-
-    captured = {}
-    raw_bill_handle = SecretHandleRegistry.issue(
-        json.dumps(
-            {
-                "record_kind": "utility_bill",
-                "provider": "consigaz",
-                "automation_id": "consigaz_visible_flow",
-                "unit_id": "UNIT-A",
-                "reference_month": "2026-05",
-                "due_date": "10/05/2026",
-                "amount": "123,45",
-                "status": "Aberto",
-                "barcode": LONG_BARCODE,
-            }
-        ),
-        {"kind": "financial_record", "record_kind": "utility_bill"},
-    )["secret_handle"]
-
-    def fake_upsert(self, extracted, config, *, flow_run_id):
-        captured["extracted"] = extracted
-        captured["config"] = config
-        captured["flow_run_id"] = flow_run_id
-        return {
-            "record": SimpleNamespace(
-                id=777,
-                automation_key=extracted["automation_key"],
-                provider=extracted["provider"],
-                unit_id=extracted["unit_id"],
-                asset="Test Asset Building",
-                reference_month=extracted["reference_month"],
-                due_date=extracted["due_date"],
-                amount_cents=12345,
-                status=extracted["status"],
-                barcode_preview="[REDACTED:47:9999]",
-            ),
-            "created": True,
-            "updated": False,
-            "barcode_changed": True,
-        }
-
-    def fail_notification(*_args, **_kwargs):
-        raise AssertionError("financial_bill_store must not create notifications")
-
-    monkeypatch.setattr(financial_service.FinancialAutomationService, "_upsert_bill", fake_upsert)
-    monkeypatch.setattr(financial_service.FinancialAutomationService, "_maybe_create_notification", fail_notification)
-
-    handler = handler_cls(db=SimpleNamespace(), mcp_sender=SimpleNamespace())
-    output = asyncio.run(
-        handler.execute(
-            SimpleNamespace(
-                id=12,
-                timeout_seconds=30,
-                config_json=json.dumps({"financial_bill_handle": raw_bill_handle}),
-            ),
-            {},
-            SimpleNamespace(id=99, tenant_id="tenant-a"),
-            SimpleNamespace(id=1003),
-        )
-    )
-
-    assert captured["extracted"]["barcode"] == LONG_BARCODE
-    assert captured["flow_run_id"] == 99
-    assert output["status"] == "completed"
-    assert output["record_store_model"] == "financial_utility_bill"
-    assert output["dedupe"]["created"] is True
-    assert output["conditions"]["should_notify"] is True
-    assert output["linha_digitavel"].startswith("pvh_")
-    assert output["barcode_delivery_handle"] == output["linha_digitavel"]
-    assert SecretHandleRegistry.resolve(output["linha_digitavel"]) == LONG_BARCODE
-    assert LONG_BARCODE not in json.dumps(output, sort_keys=True)
-
-
-def test_notification_delivers_linha_digitavel_but_persists_redacted_message(monkeypatch):
-    flow_module = _import_any("flows.flow_engine")
-    handler_cls = _get_attr_any(flow_module, "NotificationStepHandler")
-    from services.password_vault_service import SecretHandleRegistry
-
-    captured = {}
-    linha_digitavel_handle = SecretHandleRegistry.issue(
-        LONG_BARCODE,
-        {"kind": "financial_barcode", "tenant_id": "tenant-a"},
-    )["secret_handle"]
-
-    class FakeMCPSender:
-        async def send_message(self, recipient, message, **kwargs):
-            captured["recipient"] = recipient
-            captured["message"] = message
-            captured["kwargs"] = kwargs
-            return True
-
-    handler = handler_cls(db=SimpleNamespace(), mcp_sender=FakeMCPSender())
-    monkeypatch.setattr(
-        handler,
-        "_resolve_mcp_url_and_secret",
-        lambda *_args, **_kwargs: ("http://127.0.0.1:8080/api", None),
-    )
-    monkeypatch.setattr(handler, "_check_mcp_connection", lambda *_args, **_kwargs: True)
-
-    output = asyncio.run(
-        handler.execute(
-            SimpleNamespace(
-                id=15,
-                timeout_seconds=30,
-                config_json=json.dumps(
-                    {
-                        "channel": "whatsapp",
-                        "recipient": "+15551234567",
-                        "message_template": (
-                            "Linha digitavel: {{financial_store.linha_digitavel}} "
-                            "preview {{financial_store.barcode_preview}}"
-                        ),
-                    }
-                ),
-            ),
-            {
-                "financial_store": {
-                    "barcode_preview": "[REDACTED:47:9999]",
-                    "linha_digitavel": linha_digitavel_handle,
-                    "barcode_delivery_handle": linha_digitavel_handle,
-                }
-            },
-            SimpleNamespace(id=99, tenant_id="tenant-a"),
-            SimpleNamespace(id=1006),
-        )
-    )
-
-    assert output["status"] == "completed"
-    assert output["success"] is True
-    assert captured["recipient"] == "+15551234567"
-    assert LONG_BARCODE in captured["message"]
-    assert "[REDACTED:47:9999]" not in captured["message"]
-    persisted = json.dumps(output, sort_keys=True)
-    assert LONG_BARCODE not in persisted
-    assert "[REDACTED_DIGITS" in persisted
-
-
-def test_financial_bill_store_skips_explicit_no_pending_bill_without_persisting(monkeypatch):
-    flow_module = _import_any("flows.flow_engine")
-    handler_cls = _get_attr_any(flow_module, "FinancialBillStoreStepHandler")
-    import services.financial_automation_service as financial_service
-
-    def fail_upsert(*_args, **_kwargs):
-        raise AssertionError("no pending bill runs must not upsert an empty utility bill")
-
-    monkeypatch.setattr(financial_service.FinancialAutomationService, "_upsert_bill", fail_upsert)
-
-    handler = handler_cls(db=SimpleNamespace(), mcp_sender=SimpleNamespace())
-    output = asyncio.run(
-        handler.execute(
-            SimpleNamespace(
-                id=14,
-                timeout_seconds=30,
-                config_json=json.dumps(
-                    {
-                        "financial_bill": {
-                            "record_kind": "utility_bill",
-                            "automation_id": "medsenior_samedil_plano_saude_mae",
-                            "provider": "medsenior",
-                            "unit_id": "Test Health Plan",
-                            "reference_month": "",
-                            "period_key": "latest",
-                            "amount": "",
-                            "due_date": "",
-                            "status": "no_pending_bills",
-                            "barcode": "",
-                        }
-                    }
-                ),
-            ),
-            {},
-            SimpleNamespace(id=99, tenant_id="tenant-a"),
-            SimpleNamespace(id=1005),
-        )
-    )
-
-    assert output["status"] == "skipped"
-    assert output["reason"] == "no_financial_bill_detected"
-    assert output["dedupe"]["created"] is False
-    assert output["conditions"]["no_open_bills"] is True
-    assert output["conditions"]["should_notify"] is False
-
-
-def test_financial_reference_month_preserves_iso_month_before_due_date_fallback():
-    import services.financial_automation_service as financial_service
-
-    assert financial_service._to_reference_month("2026-04", "11/05/2026") == "04/2026"
-    assert financial_service._to_reference_month("Vencimento em 05/05/2026") == "05/2026"
-
-
-def test_financial_record_store_delegates_generic_records_to_store_service(monkeypatch):
-    flow_module = _import_any("flows.flow_engine")
-    handler_cls = _get_attr_any(flow_module, "FinancialRecordStoreStepHandler")
-    import services.financial_automation_service as financial_service
-
-    captured = {}
-
-    def fake_store(self, record, config, *, flow_run_id):
-        captured["record"] = record
-        captured["config"] = config
-        captured["flow_run_id"] = flow_run_id
-        return {
-            "status": "completed",
-            "success": True,
-            "record_kind": record["record_kind"],
-            "record_id": 991,
-            "dedupe": {
-                "dedupe_key": "tax_obligation:pmvv:imovel-204:2026",
-                "created": True,
-                "updated": False,
-            },
-            "conditions": {
-                "record_kind": record["record_kind"],
-                "created": True,
-                "updated": False,
-                "should_notify": True,
-            },
-            "redacted": True,
-        }
-
-    monkeypatch.setattr(financial_service.FinancialAutomationService, "store_financial_record", fake_store)
-    handler = handler_cls(db=SimpleNamespace(), mcp_sender=SimpleNamespace())
-    output = asyncio.run(
-        handler.execute(
-            SimpleNamespace(
-                id=13,
-                timeout_seconds=30,
-                config_json=json.dumps(
-                    {
-                        "record_kind": "tax_obligation",
-                        "financial_record": {
-                            "provider": "pmvv",
-                            "unit_id": "imovel-204",
-                            "period": "2026",
-                            "barcode": LONG_BARCODE,
-                            "secret": "do-not-store-clear",
-                        },
-                    }
-                ),
-            ),
-            {},
-            SimpleNamespace(id=99, tenant_id="tenant-a"),
-            SimpleNamespace(id=1004),
-        )
-    )
-
-    assert captured["record"]["record_kind"] == "tax_obligation"
-    assert captured["record"]["barcode"] == LONG_BARCODE
-    assert captured["flow_run_id"] == 99
-    assert output["status"] == "completed"
-    assert output["record_kind"] == "tax_obligation"
-    assert output["dedupe"]["created"] is True
-    assert output["conditions"]["should_notify"] is True
-
-    persisted = json.dumps(output, sort_keys=True)
-    assert LONG_BARCODE not in persisted
-    assert "do-not-store-clear" not in persisted
-
-
 def test_onepassword_provider_crud_and_test_connection_results_are_redacted():
     provider_module = _import_any(
         "hub.providers.password_vault_provider",
@@ -1426,183 +1023,6 @@ def test_flow_skill_step_redacts_password_vault_tool_output_before_persistence()
 # Bill state classifier — unit tests
 # =============================================================================
 
-def test_classify_utility_bill_state_returns_new_boleto_for_created_record_with_barcode():
-    flow_module = _import_any("flows.flow_engine")
-    handler_cls = _get_attr_any(flow_module, "FinancialRecordStoreStepHandler")
-    state = handler_cls._classify_utility_bill_state(
-        created=True, barcode_changed=False, has_barcode=True, unpaid=True,
-    )
-    assert state == "new_boleto"
-
-
-def test_classify_utility_bill_state_returns_pending_no_barcode_for_created_record_without_barcode():
-    flow_module = _import_any("flows.flow_engine")
-    handler_cls = _get_attr_any(flow_module, "FinancialRecordStoreStepHandler")
-    state = handler_cls._classify_utility_bill_state(
-        created=True, barcode_changed=False, has_barcode=False, unpaid=True,
-    )
-    assert state == "pending_no_barcode"
-
-
-def test_classify_utility_bill_state_returns_barcode_changed_when_barcode_updates():
-    flow_module = _import_any("flows.flow_engine")
-    handler_cls = _get_attr_any(flow_module, "FinancialRecordStoreStepHandler")
-    state = handler_cls._classify_utility_bill_state(
-        created=False, barcode_changed=True, has_barcode=True, unpaid=True,
-    )
-    assert state == "barcode_changed"
-
-
-def test_classify_utility_bill_state_returns_paid_when_bill_is_paid():
-    flow_module = _import_any("flows.flow_engine")
-    handler_cls = _get_attr_any(flow_module, "FinancialRecordStoreStepHandler")
-    state = handler_cls._classify_utility_bill_state(
-        created=False, barcode_changed=False, has_barcode=True, unpaid=False,
-    )
-    assert state == "paid"
-
-
-def test_classify_utility_bill_state_returns_unchanged_when_existing_record_has_no_change():
-    flow_module = _import_any("flows.flow_engine")
-    handler_cls = _get_attr_any(flow_module, "FinancialRecordStoreStepHandler")
-    state = handler_cls._classify_utility_bill_state(
-        created=False, barcode_changed=False, has_barcode=True, unpaid=True,
-    )
-    assert state == "unchanged"
-
-
-def test_classify_utility_bill_state_returns_unchanged_for_existing_record_without_barcode():
-    flow_module = _import_any("flows.flow_engine")
-    handler_cls = _get_attr_any(flow_module, "FinancialRecordStoreStepHandler")
-    state = handler_cls._classify_utility_bill_state(
-        created=False, barcode_changed=False, has_barcode=False, unpaid=True,
-    )
-    assert state == "unchanged"
-
-
-def test_classify_utility_bill_state_default_notify_states_excludes_passive_states():
-    flow_module = _import_any("flows.flow_engine")
-    handler_cls = _get_attr_any(flow_module, "FinancialRecordStoreStepHandler")
-    notify = set(handler_cls.DEFAULT_NOTIFY_STATES)
-    assert notify == {"new_boleto", "barcode_changed", "pending_no_barcode"}
-    # paid, unchanged, no_pending_bills, error must not be on the default notify list
-    assert "paid" not in notify
-    assert "unchanged" not in notify
-    assert "no_pending_bills" not in notify
-    assert "error" not in notify
-
-
-# =============================================================================
-# Bill store integration — state propagation through handler output
-# =============================================================================
-
-def test_financial_bill_store_emits_pending_no_barcode_when_open_bill_has_no_barcode(monkeypatch):
-    flow_module = _import_any("flows.flow_engine")
-    handler_cls = _get_attr_any(flow_module, "FinancialBillStoreStepHandler")
-    import services.financial_automation_service as financial_service
-
-    def fake_upsert(self, extracted, config, *, flow_run_id):
-        return {
-            "record": SimpleNamespace(
-                id=901,
-                automation_key=extracted["automation_key"],
-                provider=extracted["provider"],
-                unit_id=extracted["unit_id"],
-                asset="Test Utility Asset",
-                reference_month=extracted.get("reference_month") or "2026-05",
-                due_date=extracted.get("due_date") or "",
-                amount_cents=0,
-                status="pendente",
-                barcode_preview="",
-            ),
-            "created": True,
-            "updated": False,
-            "barcode_changed": False,
-        }
-
-    monkeypatch.setattr(financial_service.FinancialAutomationService, "_upsert_bill", fake_upsert)
-
-    handler = handler_cls(db=SimpleNamespace(), mcp_sender=SimpleNamespace())
-    output = asyncio.run(
-        handler.execute(
-            SimpleNamespace(
-                id=18,
-                timeout_seconds=30,
-                config_json=json.dumps(
-                    {
-                        "financial_bill": {
-                            "record_kind": "utility_bill",
-                            "automation_id": "edp_conta_luz_es",
-                            "provider": "edp",
-                            "unit_id": "casa-paraju",
-                            "reference_month": "2026-05",
-                            "status": "pendente",
-                            "amount": "",
-                            "due_date": "",
-                            "barcode": "",
-                        }
-                    }
-                ),
-            ),
-            {},
-            SimpleNamespace(id=99, tenant_id="tenant-a"),
-            SimpleNamespace(id=1101),
-        )
-    )
-
-    assert output["status"] == "completed"
-    assert output["notification_state"] == "pending_no_barcode"
-    assert output["conditions"]["notification_state"] == "pending_no_barcode"
-    assert output["conditions"]["should_notify"] is True
-    assert output["barcode_detected"] is False
-
-
-def test_financial_bill_store_no_pending_bill_path_emits_no_pending_bills_state(monkeypatch):
-    flow_module = _import_any("flows.flow_engine")
-    handler_cls = _get_attr_any(flow_module, "FinancialBillStoreStepHandler")
-    import services.financial_automation_service as financial_service
-
-    def fail_upsert(*_args, **_kwargs):
-        raise AssertionError("no pending bill runs must not upsert an empty utility bill")
-
-    monkeypatch.setattr(financial_service.FinancialAutomationService, "_upsert_bill", fail_upsert)
-
-    handler = handler_cls(db=SimpleNamespace(), mcp_sender=SimpleNamespace())
-    output = asyncio.run(
-        handler.execute(
-            SimpleNamespace(
-                id=19,
-                timeout_seconds=30,
-                config_json=json.dumps(
-                    {
-                        "financial_bill": {
-                            "record_kind": "utility_bill",
-                            "automation_id": "medsenior_samedil_plano_saude_mae",
-                            "provider": "medsenior",
-                            "unit_id": "Test Health Plan",
-                            "status": "no_pending_bills",
-                            "barcode": "",
-                            "amount": "",
-                        }
-                    }
-                ),
-            ),
-            {},
-            SimpleNamespace(id=99, tenant_id="tenant-a"),
-            SimpleNamespace(id=1102),
-        )
-    )
-
-    assert output["status"] == "skipped"
-    assert output["notification_state"] == "no_pending_bills"
-    assert output["conditions"]["notification_state"] == "no_pending_bills"
-    assert output["conditions"]["should_notify"] is False
-    assert output["conditions"]["no_open_bills"] is True
-
-
-# =============================================================================
-# Notification step — state-aware template selection
-# =============================================================================
 
 def test_notification_step_picks_state_template_matching_upstream_notification_state(monkeypatch):
     flow_module = _import_any("flows.flow_engine")
