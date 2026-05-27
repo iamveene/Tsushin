@@ -84,6 +84,24 @@ async def _resolve_selector_at(session: RecordingSession, x: int, y: int) -> dic
         return {}
 
 
+async def _resolve_focused_selector(session: RecordingSession) -> dict[str, Any]:
+    """Resolve the currently focused element's selector + metadata.
+
+    When the user types on the StreamCanvas, the frontend ships an
+    `input.text` envelope without a selector — the inner Chromium is the
+    only side that knows which element actually owns focus. Without this
+    resolution every FILL event compiled to selector=None and the
+    compiler fell back to `body` (BUG-768), breaking replay.
+    """
+    try:
+        return await session.page.evaluate(
+            "() => window.__tsushinFocusedSelector ? window.__tsushinFocusedSelector() : null"
+        ) or {}
+    except Exception as e:
+        logger.debug("Focused selector resolve failed: %s", e)
+        return {}
+
+
 async def _handle_client_message(
     session: RecordingSession,
     websocket: WebSocket,
@@ -170,11 +188,18 @@ async def _handle_client_message(
         if not text:
             return
         await cdp.send("Input.insertText", {"text": text})
-        # We don't know the *target* selector unless the client supplied it
-        # — Phase 2 collapses key/text streams into one `fill` row using the
-        # last focused element. For now record the raw text event.
+        # Resolve the focused element selector on the inner Chromium side
+        # so the compiled fill row points at a real input, not `body`.
+        # Frontend may supply a selector explicitly (e.g., from scripted
+        # callers); prefer that, otherwise ask the page shim.
         selector = msg.get("selector")
         field_meta = msg.get("field_meta")
+        if not selector:
+            focused = await _resolve_focused_selector(session)
+            if focused:
+                selector = focused.get("selector")
+                if not field_meta:
+                    field_meta = focused.get("meta")
         evt = session.append_event(
             "fill",
             {"selector": selector, "value": text, "field_meta": field_meta},
