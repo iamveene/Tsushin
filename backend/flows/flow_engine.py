@@ -577,7 +577,7 @@ class FlowStepHandler:
         if selector is None:
             return None
         if isinstance(selector, dict):
-            handle = selector.get("raw_response_handle") or selector.get("raw_browser_result_handle") or selector.get("handle") or selector.get("financial_record_handle")
+            handle = selector.get("raw_response_handle") or selector.get("raw_browser_result_handle") or selector.get("handle")
             source = selector.get("source_step") or selector.get("step")
             path = selector.get("path") or selector.get("json_path") or selector.get("source_path")
             payload = None
@@ -597,9 +597,6 @@ class FlowStepHandler:
             handle = (
                 step_data.get("raw_response_handle")
                 or step_data.get("raw_browser_result_handle")
-                or step_data.get("raw_bill_handle")
-                or step_data.get("financial_record_handle")
-                or step_data.get("financial_bill_handle")
             )
             if handle:
                 return self._payload_from_response_envelope(self._resolve_secret_handle_payload(str(handle)))
@@ -756,30 +753,6 @@ class NotificationStepHandler(FlowStepHandler):
                 return default_template
         return config.get("message_template") or config.get("content") or ""
 
-    def _enrich_delivery_only_secrets(self, value: Any, data: Dict[str, Any]) -> Any:
-        """Resolve short-lived delivery handles only for the outbound message body."""
-        if isinstance(value, dict):
-            enriched = {key: self._enrich_delivery_only_secrets(item, data) for key, item in value.items()}
-            linha_digitavel_handle = (
-                enriched.get("linha_digitavel")
-                or enriched.get("linha_digitavel_handle")
-                or enriched.get("barcode_delivery_handle")
-            )
-            if isinstance(linha_digitavel_handle, str) and linha_digitavel_handle.startswith("pvh_"):
-                try:
-                    linha_digitavel = self._resolve_secret_handle_value(linha_digitavel_handle, data or {})
-                except Exception:
-                    linha_digitavel = ""
-                if linha_digitavel:
-                    enriched["linha_digitavel"] = linha_digitavel
-                    enriched["barcode_for_notification"] = linha_digitavel
-                    if str(enriched.get("barcode_preview") or "").startswith("[REDACTED"):
-                        enriched["barcode_preview"] = linha_digitavel
-            return enriched
-        if isinstance(value, list):
-            return [self._enrich_delivery_only_secrets(item, data) for item in value]
-        return value
-
     async def execute(
         self,
         step: FlowNode,
@@ -831,10 +804,9 @@ class NotificationStepHandler(FlowStepHandler):
             "current_date": datetime.utcnow().strftime("%Y-%m-%d"),
         }
         message_template = self._select_message_template(config, enriched_data)
-        delivery_data = self._enrich_delivery_only_secrets(enriched_data, enriched_data)
 
         # Variable replacement
-        recipient = self._replace_variables(recipient or "", delivery_data)
+        recipient = self._replace_variables(recipient or "", enriched_data)
 
         # Empty-recipient short-circuit. This mirrors the conversation step's
         # guard: when no recipient is configured the step has nothing to do,
@@ -850,7 +822,7 @@ class NotificationStepHandler(FlowStepHandler):
                 "reason": "no_recipient_configured",
                 "message": "Notification step skipped — no recipient configured.",
             }
-        message = self._render_and_resolve_secret_handles(message_template, delivery_data)
+        message = self._render_and_resolve_secret_handles(message_template, enriched_data)
         persisted_message = _redact_for_persistence(message)
 
         if channel == "whatsapp":
@@ -1584,32 +1556,16 @@ class HttpRequestStepHandler(FlowStepHandler):
 
 
 class DataTransformStepHandler(FlowStepHandler):
-    """Deterministic extraction and financial-parser primitive."""
+    """Deterministic extraction primitive: json_path, extraction_rules, record_mapping."""
 
     def _default_source_payload(self, config: Dict[str, Any], input_data: Dict[str, Any]) -> Any:
-        handle = _first_present(config, "raw_response_handle", "financial_record_handle", "financial_bill_handle")
+        handle = config.get("raw_response_handle")
         if handle:
             return self._resolve_transform_source(str(handle), input_data)
         source_step = config.get("source_step")
         if source_step:
             return self._resolve_transform_source(source_step, input_data)
         return (input_data or {}).get("previous_step", {}).get("output") if isinstance((input_data or {}).get("previous_step"), dict) else input_data
-
-    def _named_source(self, config: Dict[str, Any], input_data: Dict[str, Any], names: List[str]) -> Any:
-        handles = config.get("raw_response_handles") if isinstance(config.get("raw_response_handles"), dict) else {}
-        source_steps = config.get("source_steps") if isinstance(config.get("source_steps"), dict) else {}
-        for name in names:
-            if handles.get(name):
-                return self._resolve_transform_source(handles[name], input_data)
-            if source_steps.get(name) is not None:
-                return self._resolve_transform_source(source_steps[name], input_data)
-            handle_key = f"{name}_raw_response_handle"
-            source_key = f"{name}_source_step"
-            if config.get(handle_key):
-                return self._resolve_transform_source(config[handle_key], input_data)
-            if config.get(source_key):
-                return self._resolve_transform_source(config[source_key], input_data)
-        return None
 
     def _apply_extraction_rules(self, rules: Any, default_payload: Any, input_data: Dict[str, Any]) -> Dict[str, Any]:
         if not rules:
@@ -1652,128 +1608,6 @@ class DataTransformStepHandler(FlowStepHandler):
             extracted[str(target)] = value
         return extracted
 
-    def _select_unpaid_bill(self, bills: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        from services.financial_automation_service import _is_paid_status
-
-        return next((bill for bill in bills if not _is_paid_status(bill.get("status"))), None) or (bills[-1] if bills else None)
-
-    def _issue_financial_record_handle(
-        self,
-        *,
-        record_kind: str,
-        payload: Dict[str, Any],
-        flow_run: FlowRun,
-        step: FlowNode,
-    ) -> str:
-        from services.password_vault_service import SecretHandleRegistry
-
-        return SecretHandleRegistry.issue(
-            json.dumps(payload, ensure_ascii=False),
-            {
-                "kind": "financial_record",
-                "record_kind": record_kind,
-                "tenant_id": flow_run.tenant_id,
-                "flow_run_id": flow_run.id,
-                "step_id": step.id,
-            },
-        )["secret_handle"]
-
-    def _parse_consigaz_bill(self, config: Dict[str, Any], input_data: Dict[str, Any], tenant_id: str) -> Dict[str, Any]:
-        from services.financial_automation_service import FinancialAutomationService, _digits_only, _is_paid_status, _parse_brl_cents
-
-        default_payload = self._default_source_payload(config, input_data)
-        boleto_json = self._named_source(config, input_data, ["boleto_json", "boleto", "consigaz_boleto_json", "consigaz_boleto"])
-        nota_json = self._named_source(config, input_data, ["nota_json", "nota", "consigaz_nota_json", "consigaz_nota"])
-        if isinstance(default_payload, dict):
-            boleto_json = boleto_json or default_payload.get("boleto_json") or default_payload.get("boleto")
-            nota_json = nota_json or default_payload.get("nota_json") or default_payload.get("nota")
-        service = FinancialAutomationService(self.db, tenant_id=tenant_id)
-        bills = service._normalize_consigaz_bills(
-            boleto_json if isinstance(boleto_json, dict) else {},
-            nota_json if isinstance(nota_json, dict) else {},
-        )
-        selected = self._select_unpaid_bill(bills)
-        if not selected:
-            return {
-                "record_kind": "utility_bill",
-                "automation_key": service.CONSIGAZ_AUTOMATION_ID,
-                "provider": service.CONSIGAZ_PROVIDER,
-                "unit_id": str(config.get("record_unit") or config.get("financial_unit_id") or ""),
-                "asset": str(config.get("record_asset") or config.get("financial_asset") or ""),
-                "address": str(config.get("record_address") or config.get("financial_address") or ""),
-                "reference_month": datetime.utcnow().strftime("%Y-%m"),
-                "no_open_bills": True,
-                "status": "no_pending_bills",
-                "all_bills_count": 0,
-            }
-        return {
-            "record_kind": "utility_bill",
-            "automation_key": service.CONSIGAZ_AUTOMATION_ID,
-            "provider": service.CONSIGAZ_PROVIDER,
-            "unit_id": str(config.get("record_unit") or config.get("financial_unit_id") or ""),
-            "asset": str(config.get("record_asset") or config.get("financial_asset") or ""),
-            "address": str(config.get("record_address") or config.get("financial_address") or ""),
-            "bill_id": selected.get("bill_id"),
-            "reference_month": selected.get("reference_month"),
-            "due_date": selected.get("due_date"),
-            "amount": selected.get("amount"),
-            "amount_cents": _parse_brl_cents(selected.get("amount")),
-            "status": selected.get("status"),
-            "barcode": _digits_only(selected.get("barcode")),
-            "issuer": selected.get("issuer") or service.CONSIGAZ_ISSUER,
-            "all_bills_count": len(bills),
-            "unpaid": not _is_paid_status(selected.get("status")),
-        }
-
-    def _parse_medsenior_bill(self, config: Dict[str, Any], input_data: Dict[str, Any], tenant_id: str) -> Dict[str, Any]:
-        from services.financial_automation_service import FinancialAutomationService, _digits_only, _is_paid_status, _parse_brl_cents
-
-        rows_payload = self._named_source(config, input_data, ["rows", "medsenior_rows", "list_json"])
-        copy_map_payload = self._named_source(config, input_data, ["copy_map", "barcodes", "medsenior_copy_map"])
-        default_payload = self._default_source_payload(config, input_data)
-        rows_payload = rows_payload if rows_payload is not None else default_payload
-        if isinstance(rows_payload, dict):
-            rows = rows_payload.get("rows") or rows_payload.get("data") or []
-            embedded_copy_map = rows_payload.get("copy_map") if isinstance(rows_payload.get("copy_map"), dict) else {}
-        else:
-            rows = rows_payload if isinstance(rows_payload, list) else []
-            embedded_copy_map = {}
-        copy_map = copy_map_payload if isinstance(copy_map_payload, dict) else embedded_copy_map
-        service = FinancialAutomationService(self.db, tenant_id=tenant_id)
-        bills = service._normalize_medsenior_bills(rows, copy_map)
-        selected = self._select_unpaid_bill(bills)
-        if not selected:
-            return {
-                "record_kind": "utility_bill",
-                "automation_key": service.MEDSENIOR_AUTOMATION_ID,
-                "provider": service.MEDSENIOR_PROVIDER,
-                "unit_id": str(config.get("record_unit") or config.get("financial_unit_id") or ""),
-                "asset": str(config.get("record_asset") or config.get("financial_asset") or ""),
-                "address": str(config.get("record_address") or config.get("financial_address") or service.MEDSENIOR_ISSUER),
-                "reference_month": datetime.utcnow().strftime("%Y-%m"),
-                "no_open_bills": True,
-                "status": "no_pending_bills",
-                "all_bills_count": 0,
-            }
-        return {
-            "record_kind": "utility_bill",
-            "automation_key": service.MEDSENIOR_AUTOMATION_ID,
-            "provider": service.MEDSENIOR_PROVIDER,
-            "unit_id": str(config.get("financial_unit_id") or ""),
-            "asset": str(config.get("financial_asset") or ""),
-            "address": str(config.get("financial_address") or service.MEDSENIOR_ISSUER),
-            "bill_id": selected.get("bill_id"),
-            "reference_month": selected.get("reference_month"),
-            "due_date": selected.get("due_date"),
-            "amount": selected.get("amount"),
-            "amount_cents": _parse_brl_cents(selected.get("amount")),
-            "status": selected.get("status"),
-            "barcode": _digits_only(selected.get("barcode")),
-            "issuer": selected.get("issuer") or service.MEDSENIOR_ISSUER,
-            "all_bills_count": len(bills),
-            "unpaid": not _is_paid_status(selected.get("status")),
-        }
-
     async def execute(
         self,
         step: FlowNode,
@@ -1785,440 +1619,27 @@ class DataTransformStepHandler(FlowStepHandler):
             raise ValueError("Data transform step requires tenant context")
 
         config = self._render_templates(self._load_config(step), input_data or {})
-        # v0.7.x: prefer the domain-neutral `parser_mode`; fall back to legacy
-        # `financial_parser_mode` so existing data_transform configs keep
-        # routing to the right normalization branch.
-        parser_mode = str(config.get("parser_mode") or config.get("financial_parser_mode") or "").strip()
-        transform_mode = str(config.get("transform_mode") or ("financial_parser" if parser_mode else "json_path")).strip()
+        transform_mode = str(config.get("transform_mode") or "json_path").strip()
 
-        if parser_mode == "consigaz_utility_bill":
-            record_kind = "utility_bill"
-            normalized = self._parse_consigaz_bill(config, input_data or {}, flow_run.tenant_id)
-        elif parser_mode == "medsenior_utility_bill":
-            record_kind = "utility_bill"
-            normalized = self._parse_medsenior_bill(config, input_data or {}, flow_run.tenant_id)
+        source_payload = self._default_source_payload(config, input_data or {})
+        if config.get("source_path"):
+            source_payload = self._extract_json_path(source_payload, config.get("source_path"))
+        if config.get("extraction_rules"):
+            normalized = self._apply_extraction_rules(config.get("extraction_rules"), source_payload, input_data or {})
+        elif config.get("json_path"):
+            normalized = {"value": self._extract_json_path(source_payload, config.get("json_path"))}
         else:
-            source_payload = self._default_source_payload(config, input_data or {})
-            if config.get("source_path"):
-                source_payload = self._extract_json_path(source_payload, config.get("source_path"))
-            if config.get("extraction_rules"):
-                normalized = self._apply_extraction_rules(config.get("extraction_rules"), source_payload, input_data or {})
-            elif config.get("json_path"):
-                normalized = {"value": self._extract_json_path(source_payload, config.get("json_path"))}
-            else:
-                normalized = source_payload if isinstance(source_payload, dict) else {"value": source_payload}
-            record_kind = str(config.get("record_kind") or normalized.get("record_kind") or "generic").strip()
+            normalized = source_payload if isinstance(source_payload, dict) else {"value": source_payload}
 
-        raw_bill_handle = None
-        financial_record_handle = None
-        # v0.7.x: prefer the domain-neutral `emit_raw_handle` / `emit_record_handle`;
-        # legacy `emit_raw_bill_handle` / `emit_financial_record_handle` still
-        # honored when only the old keys are present. The handle emitted on
-        # the result is unchanged for downstream-step compatibility.
-        emit_raw = (
-            config.get("emit_raw_handle")
-            if config.get("emit_raw_handle") is not None
-            else config.get("emit_raw_bill_handle", True)
-        )
-        emit_record = (
-            config.get("emit_record_handle")
-            if config.get("emit_record_handle") is not None
-            else config.get("emit_financial_record_handle", bool(config.get("record_kind")))
-        )
-        if isinstance(normalized, dict):
-            if record_kind == "utility_bill" and emit_raw is not False:
-                raw_bill_handle = self._issue_financial_record_handle(
-                    record_kind="utility_bill",
-                    payload=normalized,
-                    flow_run=flow_run,
-                    step=step,
-                )
-                financial_record_handle = raw_bill_handle
-            elif emit_record:
-                financial_record_handle = self._issue_financial_record_handle(
-                    record_kind=record_kind,
-                    payload=normalized,
-                    flow_run=flow_run,
-                    step=step,
-                )
-
-        conditions = {
-            "record_kind": record_kind,
-            "has_record": bool(normalized),
-            "has_barcode": bool(isinstance(normalized, dict) and normalized.get("barcode")),
-            "unpaid": bool(isinstance(normalized, dict) and normalized.get("unpaid")),
-            "should_store": bool(normalized),
-        }
         return {
             "status": "completed",
             "success": True,
             "tool_used": "data_transform",
             "transform_mode": transform_mode,
-            "financial_parser_mode": parser_mode or None,
-            "record_kind": record_kind,
             "data_preview": _redact_for_persistence(normalized),
-            "raw_bill_handle": raw_bill_handle,
-            "financial_record_handle": financial_record_handle,
-            "conditions": conditions,
             "redacted": True,
             "transformed_at": datetime.utcnow().isoformat() + "Z",
         }
-
-
-class FinancialRecordStoreStepHandler(FlowStepHandler):
-    """Generic financial record storage contract.
-
-    Utility bills keep their boleto-specific projection; other record kinds use
-    the generic financial_automation_record table so PMVV/DETRAN/Husky/B3 can
-    expose explicit storage/dedupe nodes before richer domain projections exist.
-    """
-
-    default_record_kind: Optional[str] = None
-
-    def _resolve_record_payload(self, config: Dict[str, Any], input_data: Dict[str, Any], record_kind: str) -> Optional[Dict[str, Any]]:
-        direct = config.get("financial_bill") if record_kind == "utility_bill" else None
-        direct = direct or config.get("financial_record")
-        if isinstance(direct, dict):
-            return direct
-
-        handle = (
-            config.get("financial_bill_handle")
-            or config.get("financial_record_handle")
-            or config.get("raw_bill_handle")
-        )
-        if handle:
-            payload = self._resolve_transform_source(str(handle), input_data)
-            return payload if isinstance(payload, dict) else None
-
-        # v0.7.x: domain-neutral `record_source_step` takes precedence over the
-        # legacy financial_* chain. Same field, generic name — keeps old
-        # configs working via the existing fallback below.
-        source_step = (
-            config.get("record_source_step")
-            or config.get("financial_bill_source_step")
-            or config.get("financial_bill_source")
-            or config.get("financial_record_source_step")
-            or config.get("financial_source_step")
-            or config.get("source_step")
-        )
-        payload = self._resolve_transform_source(source_step, input_data) if source_step else None
-        if payload is None and isinstance((input_data or {}).get("previous_step"), dict):
-            previous = (input_data or {}).get("previous_step") or {}
-            for key in ("raw_bill_handle", "financial_record_handle", "financial_bill_handle"):
-                if previous.get(key):
-                    payload = self._resolve_transform_source(previous[key], input_data)
-                    break
-        if isinstance(payload, dict):
-            if isinstance(payload.get("normalized_bill"), dict):
-                return payload["normalized_bill"]
-            if isinstance(payload.get("bill"), dict):
-                return payload["bill"]
-            if isinstance(payload.get("record"), dict):
-                return payload["record"]
-            return payload
-        return None
-
-    def _dedupe_key(self, record_kind: str, record: Optional[Dict[str, Any]], config: Dict[str, Any]) -> str:
-        # v0.7.x: prefer the domain-neutral `record_dedupe_key`; fall back to
-        # the legacy financial_* names so existing flows still dedupe the
-        # same way.
-        explicit = (
-            config.get("record_dedupe_key")
-            or config.get("financial_dedupe_key")
-            or config.get("financial_record_dedupe_key")
-        )
-        if explicit:
-            return str(explicit)
-        record = record or {}
-        provider = record.get("provider") or config.get("record_provider") or config.get("financial_provider") or "unknown"
-        unit_id = record.get("unit_id") or config.get("record_unit") or config.get("financial_unit_id") or "unknown"
-        reference = (
-            record.get("reference_month")
-            or record.get("due_date")
-            or record.get("period")
-            or record.get("date")
-            or "unknown"
-        )
-        return f"{record_kind}:{provider}:{unit_id}:{reference}"
-
-    DEFAULT_NOTIFY_STATES = ("new_boleto", "barcode_changed", "pending_no_barcode")
-    NOTIFICATION_STATES = (
-        "new_boleto",
-        "barcode_changed",
-        "pending_no_barcode",
-        "no_pending_bills",
-        "paid",
-        "unchanged",
-        "error",
-    )
-
-    @staticmethod
-    def _classify_utility_bill_state(
-        *,
-        created: bool,
-        barcode_changed: bool,
-        has_barcode: bool,
-        unpaid: bool,
-    ) -> str:
-        if not unpaid:
-            return "paid"
-        if created:
-            # A brand-new record always wins over barcode_changed: _upsert_bill
-            # sets barcode_changed=True for first-time inserts because the prior
-            # barcode_preview is None, but semantically that's a new_boleto.
-            return "new_boleto" if has_barcode else "pending_no_barcode"
-        if barcode_changed and has_barcode:
-            return "barcode_changed"
-        return "unchanged"
-
-    def _utility_bill_no_record_result(self, record: Dict[str, Any], config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        status = str(record.get("status") or record.get("bill_status") or "").strip().lower()
-        explicit_empty = status in {"no_pending_bills", "no_open_bills", "sem_boletos", "sem_boleto", "none"}
-        explicit_empty = explicit_empty or record.get("no_open_bills") is True
-        if not explicit_empty:
-            return None
-
-        period_key = str(record.get("period_key") or "").strip().lower()
-        has_reference = any(record.get(key) for key in ("reference_month", "month", "due_date"))
-        has_reference = has_reference or bool(period_key and period_key not in {"latest", "unknown", "none", "no_open_bill"})
-        has_amount = any(record.get(key) for key in ("amount", "amount_cents", "value", "valor"))
-        has_barcode = any(record.get(key) for key in ("barcode", "linha_digitavel", "line", "codigo_barras"))
-        if has_reference or has_amount or has_barcode:
-            return None
-
-        provider = str(record.get("provider") or config.get("record_provider") or config.get("financial_provider") or "unknown")
-        unit_id = str(record.get("unit_id") or config.get("record_unit") or config.get("financial_unit_id") or "unknown")
-        automation_key = str(
-            record.get("automation_key")
-            or record.get("automation_id")
-            or config.get("record_automation_key")
-            or config.get("financial_automation_key")
-            or config.get("financial_automation_id")
-            or ""
-        )
-        reference_month = str(
-            record.get("reference_month")
-            or record.get("month")
-            or record.get("period_key")
-            or ""
-        ).strip()
-        asset = str(
-            record.get("asset")
-            or record.get("title")
-            or config.get("record_asset")
-            or config.get("financial_asset")
-            or ""
-        ).strip()
-        return {
-            "status": "skipped",
-            "success": True,
-            "tool_used": "financial_record_store",
-            "record_kind": "utility_bill",
-            "record_store_model": "financial_utility_bill",
-            "reason": "no_financial_bill_detected",
-            "notification_state": "no_pending_bills",
-            "automation_key": automation_key,
-            "provider": provider,
-            "unit_id": unit_id,
-            "asset": asset,
-            "reference_month": reference_month,
-            "dedupe": {
-                "dedupe_key": f"utility_bill:{provider}:{unit_id}:no_open_bill",
-                "created": False,
-                "updated": False,
-                "barcode_changed": False,
-                "record_id": None,
-            },
-            "conditions": {
-                "record_kind": "utility_bill",
-                "created": False,
-                "updated": False,
-                "changed": False,
-                "barcode_changed": False,
-                "has_barcode": False,
-                "unpaid": False,
-                "should_notify": False,
-                "should_gate": False,
-                "no_open_bills": True,
-                "notification_state": "no_pending_bills",
-            },
-            "redacted": True,
-            "stored_at": datetime.utcnow().isoformat() + "Z",
-        }
-
-    def _store_utility_bill(
-        self,
-        *,
-        record: Dict[str, Any],
-        config: Dict[str, Any],
-        flow_run: FlowRun,
-    ) -> Dict[str, Any]:
-        from services.financial_automation_service import (
-            FinancialAutomationService,
-            _format_brl,
-            _is_paid_status,
-            _parse_brl_cents,
-        )
-
-        normalized = dict(record)
-        if normalized.get("amount_cents") is None and normalized.get("amount") is not None:
-            normalized["amount_cents"] = _parse_brl_cents(normalized.get("amount"))
-        automation_key = str(
-            normalized.get("automation_key")
-            or normalized.get("automation_id")
-            or config.get("record_automation_key")
-            or config.get("financial_automation_key")
-            or config.get("financial_automation_id")
-            or ""
-        )
-        if automation_key:
-            normalized.setdefault("automation_key", automation_key)
-            normalized.setdefault("automation_id", automation_key)
-
-        service = FinancialAutomationService(self.db, tenant_id=flow_run.tenant_id)
-        record_result = service._upsert_bill(normalized, config, flow_run_id=flow_run.id)
-        bill = record_result["record"]
-        unpaid = not _is_paid_status(bill.status)
-        has_barcode = bool(bill.barcode_preview)
-        raw_barcode = str(
-            normalized.get("barcode")
-            or normalized.get("linha_digitavel")
-            or normalized.get("line")
-            or normalized.get("codigo_barras")
-            or ""
-        ).strip()
-        linha_digitavel_handle = ""
-        if raw_barcode and has_barcode:
-            from services.password_vault_service import SecretHandleRegistry
-
-            linha_digitavel_handle = SecretHandleRegistry.issue(
-                raw_barcode,
-                {
-                    "kind": "financial_barcode",
-                    "record_kind": "utility_bill",
-                    "tenant_id": flow_run.tenant_id,
-                    "flow_run_id": flow_run.id,
-                    "record_id": bill.id,
-                    "automation_key": bill.automation_key,
-                    "provider": bill.provider,
-                },
-            )["secret_handle"]
-        created = bool(record_result.get("created"))
-        barcode_changed = bool(record_result.get("barcode_changed"))
-        changed = bool(created or barcode_changed)
-        notification_state = self._classify_utility_bill_state(
-            created=created,
-            barcode_changed=barcode_changed,
-            has_barcode=has_barcode,
-            unpaid=unpaid,
-        )
-        should_notify = notification_state in self.DEFAULT_NOTIFY_STATES
-        return {
-            "status": "completed",
-            "success": True,
-            "tool_used": "financial_record_store",
-            "record_kind": "utility_bill",
-            "record_store_model": "financial_utility_bill",
-            "record_id": bill.id,
-            "automation_key": bill.automation_key,
-            "provider": bill.provider,
-            "unit_id": bill.unit_id,
-            "asset": bill.asset,
-            "reference_month": bill.reference_month,
-            "due_date": bill.due_date,
-            "amount_cents": bill.amount_cents,
-            "amount_display": _format_brl(bill.amount_cents),
-            "bill_status": bill.status,
-            "barcode_detected": has_barcode,
-            "barcode_preview": bill.barcode_preview,
-            "linha_digitavel": linha_digitavel_handle,
-            "linha_digitavel_preview": bill.barcode_preview,
-            "barcode_delivery_handle": linha_digitavel_handle,
-            "notification_state": notification_state,
-            "dedupe": {
-                "dedupe_key": f"utility_bill:{bill.provider}:{bill.unit_id}:{bill.reference_month}",
-                "created": record_result["created"],
-                "updated": record_result["updated"],
-                "barcode_changed": record_result["barcode_changed"],
-                "record_id": bill.id,
-            },
-            "conditions": {
-                "record_kind": "utility_bill",
-                "created": record_result["created"],
-                "updated": record_result["updated"],
-                "changed": changed,
-                "barcode_changed": record_result["barcode_changed"],
-                "has_barcode": has_barcode,
-                "unpaid": unpaid,
-                "should_notify": should_notify,
-                "should_gate": should_notify,
-                "no_open_bills": bool(normalized.get("no_open_bills")),
-                "notification_state": notification_state,
-            },
-            "redacted": True,
-            "stored_at": datetime.utcnow().isoformat() + "Z",
-        }
-
-    async def execute(
-        self,
-        step: FlowNode,
-        input_data: Dict[str, Any],
-        flow_run: FlowRun,
-        step_run: FlowNodeRun
-    ) -> Dict[str, Any]:
-        if not (flow_run and flow_run.tenant_id):
-            raise ValueError("Financial record store step requires tenant context")
-
-        config = self._render_templates(self._load_config(step), input_data or {})
-        record_kind = str(
-            config.get("record_kind")
-            or config.get("financial_record_kind")
-            or self.default_record_kind
-            or "utility_bill"
-        ).strip()
-        record = self._resolve_record_payload(config, input_data or {}, record_kind)
-
-        if not isinstance(record, dict) or not record:
-            return {
-                "status": "failed",
-                "success": False,
-                "error": "financial_record_payload_required",
-                "record_kind": record_kind,
-                "notification_state": "error",
-                "dedupe": {
-                    "dedupe_key": self._dedupe_key(record_kind, record, config),
-                    "created": False,
-                    "updated": False,
-                    "record_id": None,
-                },
-                "conditions": {
-                    "record_kind": record_kind,
-                    "created": False,
-                    "updated": False,
-                    "changed": False,
-                    "should_notify": False,
-                    "should_gate": False,
-                    "notification_state": "error",
-                },
-                "redacted": True,
-            }
-        if record_kind == "utility_bill":
-            no_record_result = self._utility_bill_no_record_result(record, config)
-            if no_record_result is not None:
-                return no_record_result
-            return self._store_utility_bill(record=record, config=config, flow_run=flow_run)
-
-        from services.financial_automation_service import FinancialAutomationService
-
-        record = {**record, "record_kind": record_kind}
-        service = FinancialAutomationService(self.db, tenant_id=flow_run.tenant_id)
-        return service.store_financial_record(record, config, flow_run_id=flow_run.id)
-
-
-class FinancialBillStoreStepHandler(FinancialRecordStoreStepHandler):
-    """Utility-bill convenience alias for the generic financial record store."""
-
-    default_record_kind = "utility_bill"
 
 
 class SlashCommandStepHandler(FlowStepHandler):
@@ -4279,13 +3700,6 @@ class FlowEngine:
             "password_vault": PasswordVaultStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: secret references
             "http_request": HttpRequestStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: UI-authored HTTP primitive
             "data_transform": DataTransformStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: deterministic extraction primitive
-            "financial_record_store": FinancialRecordStoreStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: generic financial storage primitive
-            "financial_bill_store": FinancialBillStoreStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.x: utility bill storage alias
-            # v0.7.x Genericize: domain-neutral alias of financial_record_store.
-            # Same handler instance — `record_*` config fields take precedence
-            # over `financial_*` via fallback-aware getters; legacy flows keep
-            # working unchanged.
-            "record_store": FinancialRecordStoreStepHandler(db, self.mcp_sender, self.token_tracker),
             "source": SourceStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.0: Triggers↔Flows source entry node
             # Legacy types (backward compatibility)
             "Source": SourceStepHandler(db, self.mcp_sender, self.token_tracker),  # v0.7.0: legacy casing alias
@@ -4300,8 +3714,6 @@ class FlowEngine:
             "BrowserAutomation": BrowserAutomationStepHandler(db, self.mcp_sender, self.token_tracker),  # Phase 14.5: Legacy casing
             "HttpRequest": HttpRequestStepHandler(db, self.mcp_sender, self.token_tracker),
             "DataTransform": DataTransformStepHandler(db, self.mcp_sender, self.token_tracker),
-            "FinancialRecordStore": FinancialRecordStoreStepHandler(db, self.mcp_sender, self.token_tracker),
-            "FinancialBillStore": FinancialBillStoreStepHandler(db, self.mcp_sender, self.token_tracker),
             "AgentNode": ConversationStepHandler(db, self.mcp_sender, self.token_tracker),  # BUG-495: alias for agent-based conversation node
         }
 

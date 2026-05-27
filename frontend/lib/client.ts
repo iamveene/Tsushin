@@ -3091,7 +3091,7 @@ export interface FlowRecurrenceRule {
 }
 
 // v0.7.0 Wave 2: added 'source' step type (locked at position 0, one per flow)
-export type StepType = 'notification' | 'message' | 'tool' | 'conversation' | 'skill' | 'summarization' | 'slash_command' | 'gate' | 'source' | 'password_vault' | 'browser_automation' | 'browser_group' | 'http_request' | 'data_transform' | 'record_store' | 'financial_record_store' | 'financial_bill_store'
+export type StepType = 'notification' | 'message' | 'tool' | 'conversation' | 'skill' | 'summarization' | 'slash_command' | 'gate' | 'source' | 'password_vault' | 'browser_automation' | 'browser_group' | 'http_request' | 'data_transform'
 
 // Summarization output format options
 export type SummarizationOutputFormat = 'brief' | 'detailed' | 'structured' | 'minimal'
@@ -3147,8 +3147,6 @@ export interface DataParserRuleConfig {
   parser?: string
   options?: string
 }
-
-export type FinancialRecordKind = 'utility_bill' | 'tax_obligation' | 'income_transfer' | 'investment_snapshot'
 
 export interface FlowStepConfig {
   channel?: 'whatsapp' | 'telegram' | 'slack' | 'discord'
@@ -3224,7 +3222,6 @@ export interface FlowStepConfig {
   http_secret_references?: FlowSecretReferenceConfig[]
   // Data transform primitive config
   transform_mode?: string
-  financial_parser_mode?: string | null
   source_steps?: Record<string, string>
   raw_response_handle?: string
   raw_response_handles?: Record<string, string>
@@ -3233,39 +3230,6 @@ export interface FlowStepConfig {
   extraction_rules?: DataExtractionRuleConfig[]
   parser_rules?: DataParserRuleConfig[]
   record_mapping?: Record<string, any>
-  emit_raw_bill_handle?: boolean
-  emit_financial_record_handle?: boolean
-  // Financial bill store primitive config
-  record_kind?: FinancialRecordKind | string
-  financial_record_source_step?: string
-  financial_record_dedupe_key?: string
-  financial_record_key_fields?: string
-  financial_record_payload?: string
-  financial_source_step?: string
-  financial_automation_key?: string
-  financial_bill_source?: string
-  // Financial utility automation step config
-  financial_automation_template?: string
-  financial_provider?: string
-  financial_unit_id?: string
-  financial_asset?: string
-  financial_address?: string
-  financial_customer_code?: string
-  financial_delivery_location?: string
-  financial_username_field?: string
-  financial_password_field?: string
-  financial_browser_timeout_ms?: number
-  financial_notification_enabled?: boolean
-  financial_notification_recipient?: string
-  financial_notification_agent_id?: number
-  financial_password_vault_integration_id?: number | null
-  financial_password_vault_provider?: string | null
-  financial_password_vault_vault_id?: string | null
-  financial_password_vault_vault_name?: string | null
-  financial_password_vault_item_id?: string | null
-  financial_password_vault_item_title?: string | null
-  financial_password_vault_field_name?: string | null
-  financial_password_vault_reference?: string | null
 }
 
 export interface CreateFlowStepData {
