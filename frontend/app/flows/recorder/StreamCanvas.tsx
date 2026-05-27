@@ -223,6 +223,21 @@ export default function StreamCanvas({
   // (one source of truth for char insertion). Non-printable keys
   // (Tab/Enter/Backspace/Arrow/etc.) keep the key-event path because
   // they don't have an insertable text payload.
+  // BUG-772/778: printable single chars take the text-insert path
+  // exclusively (one source of truth for char insertion). Non-printable
+  // keys (Tab/Enter/Backspace/Arrow/etc.) keep the key-event path
+  // because they don't have an insertable text payload.
+  //
+  // Known limitation when driven by automation tooling (Playwright
+  // `computer.type`, Claude-in-Chrome): one OS char often arrives as
+  // 2-3 keydown events within microseconds AND the inter-char gap can
+  // be as small as that, so timing-based same-key dedupe can't
+  // distinguish OS-retrigger from a real fast typist's "88"/"11" in a
+  // tracking code. Real users typing in a browser don't trigger the
+  // amplification — this is a test-tool artefact. The recommended
+  // workflow when driving the recorder from automation: paste the
+  // text via the canvas's onPaste handler (one envelope per paste,
+  // no per-keystroke noise).
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLCanvasElement>) => {
     e.preventDefault()
     const isPrintableChar = e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey

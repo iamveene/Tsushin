@@ -187,6 +187,23 @@ async def _handle_client_message(
         text = str(msg.get("text", ""))
         if not text:
             return
+        # BUG-778: the FRONTEND now suppresses OS-level keystroke
+        # amplification before sending input.text (StreamCanvas's
+        # handleKeyDown drops repeats of the same key within 30ms). The
+        # backend keeps a very tight 8ms backstop in case an in-process
+        # caller (e.g. scripted clients) double-sends, but never wider
+        # than that — real consecutive same-char typing is >50ms apart
+        # and tracking codes legitimately contain "88"/"11"/etc.
+        import time as _time
+        now = _time.time()
+        if (
+            session.last_text_insert_value == text
+            and now - session.last_text_insert_at < 0.008
+        ):
+            session.last_text_insert_at = now
+            return
+        session.last_text_insert_at = now
+        session.last_text_insert_value = text
         await cdp.send("Input.insertText", {"text": text})
         # Resolve the focused element selector on the inner Chromium side
         # so the compiled fill row points at a real input, not `body`.
