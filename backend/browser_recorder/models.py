@@ -103,6 +103,14 @@ class RecordingSession:
     # (frameNavigated, loadEventFired) so reconnection is transparent.
     relay_send: Optional[Any] = None  # async callable: (dict) -> None
 
+    # BUG-778: OS-level keyboard simulation (Claude-in-Chrome, Playwright
+    # `computer.type`) often fires keydown multiple times per character —
+    # producing duplicate `input.text` envelopes that the runtime inserts
+    # as duplicate chars. Track the last text+timestamp per session so the
+    # relay can debounce identical inserts within a tight window.
+    last_text_insert_at: float = 0.0
+    last_text_insert_value: Optional[str] = None
+
     # Janitor uses this; default 30 min, hard cap 2h enforced at create time
     # (Phase 7 will plug the cap in).
     ttl_seconds: int = 30 * 60

@@ -990,6 +990,17 @@ A healthy run ends with `OVERALL: PASS` and a WhatsApp ping to Vini. If the What
 - The recorder uses **stock Playwright** — sites that ban automated browsers may reject the inner session. For those targets, the existing manual editor still works.
 - Each tenant can have **2 concurrent recordings** open at once; trying to start a third returns HTTP 409 with a "discard an existing recording first" hint.
 - Recordings auto-tear down **30 minutes** after the last interaction, hard cap **2 hours**. A forgotten dialog won't leak a Chromium instance.
+- **Recorder behaviour after the 2026-05-27 bug-fix wave** (PRs #214/#216/#218/#220):
+  - The streamed canvas auto-focuses on first click — typing the very next character reaches the inner page (no devtools focus trick needed).
+  - FILL events in the step ledger collapse one row per typed string (was one row per keystroke).
+  - The captcha "Mark captcha" toolbar resolves the image selector correctly; the compiler scrubs document-root selectors (`body`/`html`/`*`) and refuses to ship them.
+  - The captcha submit button is chosen from the recorded sequence by name — `button[name="b-pesquisar"]` / submit-button-like CSS — instead of the focus-click into the captcha input.
+  - When the recorder didn't capture an explicit wait between submit and extract, the compiler auto-inserts `wait_tracking_result` targeting the extract's selector (only when the selector matches a content-region pattern like `.ship-steps` / `.result` / `.tracking`).
+  - The captcha skill's `success_selector` is only populated when the recorded extract matches a content-region pattern — noise selectors (carousel, ads) are scrubbed so the skill doesn't exit before the page settles.
+  - Newly recorded browser_automation children + new Notification steps default `on_failure='continue'` — so a single bad step never silently swallows the trailing alert.
+  - The "Capture as output" naming dialog is now an in-modal form (was `window.prompt`); Cancel really cancels.
+  - The notification step's MCP resolver falls back to a `tester` instance for the same tenant when no `agent` instance is registered — the default local-dev shape (e.g. a tenant whose only WhatsApp MCP is the Vini local tester on port 8082) now delivers correctly instead of silently routing to the hardcoded `127.0.0.1:8080` default.
+- **Known limitation when driving the recorder from test tooling** (Playwright `computer.type`, Claude-in-Chrome, similar): OS-level keyboard simulation often delivers each character as 2-3 keydown events within microseconds, and the inter-character gap can be just as small — so a frontend time-based dedupe either keeps the noise (window too tight) or eats legitimate consecutive same-char typing such as `"88"`/`"11"` in tracking codes. Real users typing in a browser don't trigger this. **Workarounds for automation:** (a) paste the text via the canvas's clipboard-paste handler (one envelope per paste, no per-keystroke noise), or (b) record the rest of the flow normally and fix the fill value post-record in the wizard step editor.
 
 **Step configuration:** timeout (default: 300s), retry on failure, conditions, on_success/on_failure actions (continue, skip_to, end, retry, skip), agent/persona overrides.
 
