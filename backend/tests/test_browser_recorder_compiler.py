@@ -760,3 +760,40 @@ def test_bug771_consecutive_clicks_on_different_selectors_preserved():
     cfg = compile_events(events)
     click_rows = [r for r in cfg["selectors"] if r["action"] == "click"]
     assert len(click_rows) == 2
+
+
+def test_bug773_combine_captcha_picks_submit_button_not_input_click():
+    """Compiler must skip the focus-click into the captcha input and pick
+    the actual submit button (button[name=b-pesquisar] / button#submit)."""
+    events = [
+        RecordedEvent("navigate", {"url": "https://example.com/"}),
+        RecordedEvent("fill", {
+            "selector": "input[name=\"objeto\"]",
+            "value": "AD468811215BR",
+            "field_meta": {"tag": "input", "name": "objeto"},
+        }),
+        RecordedEvent("marker.captcha", {
+            "selector": "img#captcha_image",
+            "meta": {"tag": "img", "id": "captcha_image"},
+        }),
+        RecordedEvent("click", {  # focus-click into captcha input (should be skipped)
+            "selector": "input#captcha",
+            "meta": {"tag": "input", "id": "captcha"},
+        }),
+        RecordedEvent("fill", {
+            "selector": "input#captcha",
+            "value": "XXXXXX",
+            "field_meta": {"tag": "input", "id": "captcha"},
+        }),
+        RecordedEvent("click", {  # actual submit
+            "selector": "button[name=\"b-pesquisar\"]",
+            "meta": {"tag": "button", "name": "b-pesquisar"},
+        }),
+        RecordedEvent("marker.extract", {
+            "selector": "#tabs-rastreamento .ship-steps",
+            "as": "delivery_status",
+        }),
+    ]
+    children = compile_events_into_nodes(events)
+    captcha_node = next(c for c in children if (c["config_json"] or {}).get("tool_action") == "solve_captcha")
+    assert captcha_node["config_json"]["tool_arguments"]["submit_selector"] == "button[name=\"b-pesquisar\"]"

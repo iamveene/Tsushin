@@ -278,13 +278,30 @@ class FlowStepHandler:
                         tenant_id = agent.tenant_id
                         logger.debug(f"Resolved tenant_id from flow.default_agent_id: {tenant_id}")
 
-            # Query MCP instance with tenant filter (if available)
+            # Query MCP instance with tenant filter (if available).
+            # BUG-775: previously this only accepted instance_type="agent"
+            # and fell through to the hardcoded 127.0.0.1:8080 default
+            # when a tenant only had a `tester` instance — which is the
+            # default local-dev shape. Accept `tester` as a fallback when
+            # no agent exists so local-dev flows actually deliver.
             if tenant_id:
                 instance = self.db.query(WhatsAppMCPInstance).filter(
                     WhatsAppMCPInstance.tenant_id == tenant_id,
                     WhatsAppMCPInstance.instance_type == "agent",
                     WhatsAppMCPInstance.status.in_(["running", "starting"])
                 ).first()
+
+                if not instance:
+                    instance = self.db.query(WhatsAppMCPInstance).filter(
+                        WhatsAppMCPInstance.tenant_id == tenant_id,
+                        WhatsAppMCPInstance.instance_type == "tester",
+                        WhatsAppMCPInstance.status.in_(["running", "starting"])
+                    ).first()
+                    if instance and instance.mcp_api_url:
+                        logger.info(
+                            f"No 'agent' MCP for tenant {tenant_id}; falling back to "
+                            f"'tester' instance {instance.mcp_api_url}"
+                        )
 
                 if instance and instance.mcp_api_url:
                     logger.info(f"Resolved MCP URL for tenant {tenant_id}: {instance.mcp_api_url}")
