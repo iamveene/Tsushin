@@ -187,13 +187,6 @@ class StepType(str, Enum):
     PASSWORD_VAULT = "password_vault"  # v0.7.x: provider-neutral vault references
     HTTP_REQUEST = "http_request"  # UI-authored deterministic HTTP/API step
     DATA_TRANSFORM = "data_transform"  # UI-authored extraction/normalization step
-    FINANCIAL_BILL_STORE = "financial_bill_store"  # Utility-bill storage/dedupe only
-    FINANCIAL_RECORD_STORE = "financial_record_store"  # Generic financial record storage/dedupe
-    # v0.7.x: domain-neutral rename of financial_record_store. New flows
-    # should use this; the financial_* aliases keep working for existing
-    # flows. Same handler with fallback-aware field resolution
-    # (record_* preferred, financial_* fallback).
-    RECORD_STORE = "record_store"
     # v0.7.0 Wave 2/4: Triggers↔Flows Unification — Source step is the
     # canonical entry point for triggered flows. Wave 4 deep-link prefill
     # (Create flow from this trigger) sends a Source step with config
@@ -304,30 +297,6 @@ class FlowStepConfig(BaseModel):
     password_vault_field_name: Optional[str] = None
     password_vault_reference: Optional[str] = None
 
-    # Financial utility automation-specific. These are UI-authored so the
-    # canary boleto automation is reproducible without seeds or scripts.
-    financial_automation_template: Optional[str] = None
-    financial_provider: Optional[str] = None
-    financial_unit_id: Optional[str] = None
-    financial_asset: Optional[str] = None
-    financial_address: Optional[str] = None
-    financial_customer_code: Optional[str] = None
-    financial_delivery_location: Optional[str] = None
-    financial_username_field: Optional[str] = None
-    financial_password_field: Optional[str] = None
-    financial_browser_timeout_ms: Optional[int] = None
-    financial_notification_enabled: Optional[bool] = None
-    financial_notification_recipient: Optional[str] = None
-    financial_notification_agent_id: Optional[int] = None
-    financial_password_vault_integration_id: Optional[int] = None
-    financial_password_vault_provider: Optional[str] = None
-    financial_password_vault_vault_id: Optional[str] = None
-    financial_password_vault_vault_name: Optional[str] = None
-    financial_password_vault_item_id: Optional[str] = None
-    financial_password_vault_item_title: Optional[str] = None
-    financial_password_vault_field_name: Optional[str] = None
-    financial_password_vault_reference: Optional[str] = None
-
     # Browser automation primitive-specific. These fields keep a UI-authored
     # browser step round-trippable as explicit actions/selectors rather than a
     # natural-language-only prompt.
@@ -348,8 +317,7 @@ class FlowStepConfig(BaseModel):
     treat_failure_as_skipped: Optional[bool] = None
 
     # HTTP request primitive-specific. These fields intentionally mirror the
-    # UI control groups so imported financial automations can be rebuilt as
-    # visible request/transform/store flows instead of opaque mega-steps.
+    # UI control groups for visible request/transform flows.
     method: Optional[str] = None
     headers: Optional[Any] = None
     query: Optional[Any] = None
@@ -377,10 +345,8 @@ class FlowStepConfig(BaseModel):
     http_raw_response_handle: Optional[bool] = None
 
     # Data transform primitive-specific. `source_step` is shared with
-    # summarization; these fields add deterministic extraction and financial
-    # parser modes.
+    # summarization.
     transform_mode: Optional[str] = None
-    parser_mode: Optional[str] = None
     source_steps: Optional[Dict[str, Any]] = None
     source_handle_path: Optional[str] = None
     source_path: Optional[str] = None
@@ -390,52 +356,6 @@ class FlowStepConfig(BaseModel):
     extraction_rules: Optional[Any] = None
     parser_rules: Optional[Any] = None
     record_mapping: Optional[Dict[str, Any]] = None
-    issue_record_handle: Optional[bool] = None
-    financial_parser_mode: Optional[str] = None
-    emit_raw_bill_handle: Optional[bool] = None
-    emit_financial_record_handle: Optional[bool] = None
-
-    # Generic financial record store primitive-specific. `financial_bill_store`
-    # is a utility-bill alias; broader Finan workflows can use
-    # `financial_record_store` with record_kind values such as tax_obligation,
-    # income_transfer, and investment_snapshot.
-    record_kind: Optional[str] = None
-    financial_record_kind: Optional[str] = None
-    financial_automation_key: Optional[str] = None
-    financial_subject_key: Optional[str] = None
-    financial_record: Optional[Dict[str, Any]] = None
-    financial_record_handle: Optional[str] = None
-    financial_record_handle_path: Optional[str] = None
-    financial_record_source_step: Optional[str] = None
-    financial_record_dedupe_key: Optional[str] = None
-    financial_record_key_fields: Optional[str] = None
-    financial_record_payload: Optional[str] = None
-    financial_source_step: Optional[str] = None
-    financial_dedupe_key: Optional[str] = None
-    financial_notify_on_update: Optional[bool] = None
-
-    # Financial bill store primitive-specific. The handler only stores or
-    # dedupes normalized bill data; notification remains an explicit later node.
-    financial_bill_handle: Optional[str] = None
-    financial_bill_source_step: Optional[str] = None
-    financial_bill_source: Optional[str] = None
-    financial_bill: Optional[Dict[str, Any]] = None
-
-    # v0.7.x: domain-neutral aliases for the financial_* fields above. Used
-    # by the new `record_store` step type and by the renamed UI panel.
-    # `RecordStoreStepHandler` reads these first; falls back to the
-    # `financial_*` names when only the legacy fields are present so old
-    # flows keep working. Same idea for `data_transform`'s emit flags.
-    record_provider: Optional[str] = None              # ⇆ financial_provider
-    record_unit: Optional[str] = None                  # ⇆ financial_unit_id
-    record_asset: Optional[str] = None                 # ⇆ financial_asset
-    record_address: Optional[str] = None               # ⇆ financial_address
-    record_automation_key: Optional[str] = None        # ⇆ financial_automation_key
-    record_source_step: Optional[str] = None           # ⇆ financial_record_source_step / financial_source_step / source_step
-    record_dedupe_key: Optional[str] = None            # ⇆ financial_dedupe_key / financial_record_dedupe_key
-    emit_record_handle: Optional[bool] = None          # ⇆ emit_financial_record_handle
-    emit_raw_handle: Optional[bool] = None             # ⇆ emit_raw_bill_handle
-    parser_mode: Optional[str] = None                  # ⇆ financial_parser_mode
 
     # Conversation-specific
     objective: Optional[str] = None

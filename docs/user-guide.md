@@ -191,8 +191,6 @@ Two modes: **Playwright** (in-container, no setup needed) or **CDP** (connects t
 
 If **Password Vault** is already attached to an agent, it appears as an active skill card rather than as another option inside **Add Skill**. Use **Configure** on that card to change the provider or capability toggles.
 
-For migrated financial automations, use **Flows > From Template** when a supported provider is available. Templates expand into ordinary editable steps rather than a hidden runner: Password Vault, Browser Automation or HTTP Request, Data Transform, Store/Dedupe, Gate, and Notification. The wizard keeps technical overrides in **Advanced options** by default, so most users only choose the vault reference, agent, channel, and recipient before previewing the visible step graph.
-
 #### TTS Providers (Text-to-Speech)
 
 Three options: **Kokoro** (local, self-hosted), **OpenAI TTS**, or **ElevenLabs**. Configure under **Hub > TTS Providers**, then enable the TTS skill on your agents.
@@ -893,13 +891,11 @@ Generic tracking, scraping, and portal-monitoring flows should be reconstructabl
 | **Slash Command** | Executes a platform slash command. |
 | **Skill** | Runs an agent skill (built-in or custom). |
 | **Summarization** | AI summarization of previous step outputs. |
-| **Gate** | Conditional branch — evaluates `gate_conditions` against `gate_logic` (`all`, `any`, programmatic). v0.7.x adds `in` / `not_in` operators on list values, used by financial flows to route on `notification_state`. |
+| **Gate** | Conditional branch — evaluates `gate_conditions` against `gate_logic` (`all`, `any`, programmatic). v0.7.x adds `in` / `not_in` operators on list values, useful for routing on an upstream `notification_state`. |
 | **Password Vault** | Resolves an approved vault reference without placing secrets in prompts. |
 | **Browser Automation** | Navigate, click, fill forms, extract content, screenshot — configured through a guided wizard that picks between **🎬 Record a flow** (drive Chromium once, Tsushin compiles the selectors) and **⚙️ Configure manually** (action picker → URL → selector rows). Advanced settings (timeout overrides, session profile, integration ID, tool arguments) live behind a single collapsible toggle on the Review step. |
 | **HTTP Request** | Calls an API with editable method, URL, headers, body, and secret references. |
 | **Data Transform** | Extracts and normalizes fields from previous step outputs. |
-| **Financial Record Store** | Persists and dedupes financial records; emits `notification_state` for downstream gates/notifications. |
-| **Utility Bill Store** | Utility-bill-specific storage and dedupe alias of Financial Record Store. |
 
 The **Source** step appears only on triggered flows and is generated from the selected Hub trigger. It is locked at the top of the flow and cannot be added manually. The legacy `Trigger`, `Subflow`, and `AgentNode` step types are kept as backward-compatible aliases for older flows.
 
