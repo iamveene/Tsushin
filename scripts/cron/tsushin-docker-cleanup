@@ -1,0 +1,25 @@
+# Tsushin production Docker disk maintenance (system cron).
+#
+# Source of truth: this file is version-controlled at
+#   scripts/cron/tsushin-docker-cleanup
+# and installed on the prod host as:
+#   /etc/cron.d/tsushin-docker-cleanup   (root:root, mode 644, no '.' in name)
+#
+# It runs scripts/docker-disk-cleanup.sh once a day to cap the BuildKit build
+# cache and prune unused images, so the disk can never fill the way it did on
+# 2026-05-28 (262 GB of build cache -> 100% disk -> failed deploy).
+#
+# Replaces the old /etc/cron.d/docker-image-prune, which pruned images but
+# never the build cache. flock prevents overlap if a run ever runs long.
+#
+# Install / update:
+#   sudo install -m 644 -o root -g root \
+#     /opt/code/tsushin/scripts/cron/tsushin-docker-cleanup \
+#     /etc/cron.d/tsushin-docker-cleanup
+#   sudo rm -f /etc/cron.d/docker-image-prune
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Daily at 04:30 UTC (01:30 in BRT, the lowest-traffic window for the BR userbase).
+30 4 * * * root flock -n /run/lock/tsushin-docker-cleanup.lock /opt/code/tsushin/scripts/docker-disk-cleanup.sh >> /var/log/tsushin-docker-cleanup.log 2>&1
