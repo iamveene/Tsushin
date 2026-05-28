@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — Daily prod Docker disk-maintenance cron (build-cache cap) (2026-05-28)
+
+A production deploy on 2026-05-28 failed because the host disk was 100% full: the Docker **build cache had grown unbounded to ~262 GB**. Root cause — the only cleanup cron on the host was `/etc/cron.d/docker-image-prune` (`docker image prune -af --filter "until=24h"`), and `docker image prune` **never touches the BuildKit build cache**. Frequent `--no-cache` rebuilds (the deploy path) accumulated cache with nothing reclaiming it.
+
+- **New maintenance script** `scripts/docker-disk-cleanup.sh`: prunes unused images older than `TSN_IMAGE_PRUNE_UNTIL` (default `24h`) **and** caps the build cache to `TSN_BUILD_CACHE_MAX` (default `10GB`, via `docker buildx prune -af --max-used-space`). Logs before/after disk + `docker system df`. Only touches *unused* resources — running containers, their images, and named volumes (Postgres data, WhatsApp MCP helpers) are never affected; it deliberately does not prune containers or volumes.
+- **New system cron** `scripts/cron/tsushin-docker-cleanup` → installed as `/etc/cron.d/tsushin-docker-cleanup`, runs daily at **04:30 UTC** (01:30 BRT, lowest-traffic window) under `flock` to prevent overlap, logging to `/var/log/tsushin-docker-cleanup.log`. **Replaces** the old `/etc/cron.d/docker-image-prune` (which never pruned the cache).
+- **Installed and verified on prod** (`hunter.archsec.io`): the cron is registered, a manual run logged a clean pass, and the build cache stays bounded so the disk can't fill the way it did during the failed deploy.
+
 ### Added — Browser Recorder "Capture timeline": structured tracking flows from the UI alone (2026-05-28)
 
 Rebuilding the canonical Correios → @Vini flow **entirely through the recorder UI** (no API/DB/script bypass, no hand-written config) surfaced that the recorder couldn't produce the structured tracking message on its own — the previous "working" flow #271 was hand-built with an `execute_script` parser + `data_transform` + a hand-written notification template. This release lets the recorder produce that whole pipeline from the UI.
