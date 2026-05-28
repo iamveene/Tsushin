@@ -129,9 +129,18 @@ function Thumb({ src, alt, label }: { src?: string | null; alt: string; label: s
       </div>
     )
   }
-  const href = src.startsWith('data:') || src.startsWith('http') || src.startsWith('/')
-    ? src
-    : `data:image/jpeg;base64,${src}`
+  // BUG-784: recorded screenshots are RAW base64. JPEG frames almost always
+  // begin with "/9j/", so a naive `startsWith('/')` URL check misclassified
+  // them as a root-relative path → the browser fetched `/9j/...` → 404 →
+  // broken <img>. Treat the value as base64 UNLESS it's clearly a data: URI,
+  // an http(s)/blob URL, or a path with a real file extension.
+  const looksLikeUrl =
+    src.startsWith('data:') ||
+    src.startsWith('http://') ||
+    src.startsWith('https://') ||
+    src.startsWith('blob:') ||
+    (src.startsWith('/') && /\.[a-z0-9]{2,5}([?#]|$)/i.test(src))
+  const href = looksLikeUrl ? src : `data:image/jpeg;base64,${src}`
   return (
     <div className="flex flex-col gap-1">
       <a
