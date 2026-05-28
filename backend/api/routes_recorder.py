@@ -112,6 +112,14 @@ class CompileResponse(BaseModel):
     event_count: int
 
 
+class CompileRequest(BaseModel):
+    # Optional WhatsApp recipient (e.g. "@Vini"). When set AND the recording
+    # captured a structured "event timeline", the compiler appends a trailing
+    # data_transform + notification so the UI-only recording yields the full
+    # canonical pipeline with no manual config.
+    notify_recipient: Optional[str] = Field(default=None, max_length=200)
+
+
 class StartAgentRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
     planner_model: Optional[str] = None
@@ -168,6 +176,7 @@ async def create_session(
 )
 async def compile_session(
     session_id: str,
+    body: Optional[CompileRequest] = None,
     ctx: TenantContext = Depends(get_tenant_context),
 ) -> CompileResponse:
     """Return a preview of the FlowNode.config_json for the recorded session.
@@ -194,6 +203,7 @@ async def compile_session(
     flow_group = compile_events_into_group(
         session.events,
         recording_id=session.recording_id,
+        notify_recipient=(body.notify_recipient if body else None),
     )
 
     return CompileResponse(

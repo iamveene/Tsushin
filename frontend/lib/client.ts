@@ -3442,6 +3442,17 @@ export interface BrowserGroupCompiled {
     config_json: BrowserGroupChildConfig & Record<string, any>
     timeout_seconds?: number
   }>
+  // Non-browser steps the recorder auto-wires AFTER the group (e.g. a
+  // data_transform that normalizes a captured timeline + a notification that
+  // sends the structured update). Empty unless the recording captured a
+  // "timeline" marker. Inserted as flat flow steps, each with its own type.
+  trailing_nodes?: Array<{
+    name: string
+    type: string
+    config_json: Record<string, any>
+    timeout_seconds?: number
+    on_failure?: string
+  }>
 }
 
 export interface RecorderCompileResponse {
@@ -11734,9 +11745,14 @@ export const api = {
     return res.json()
   },
 
-  async compileRecorderSession(sessionId: string): Promise<RecorderCompileResponse> {
+  async compileRecorderSession(
+    sessionId: string,
+    opts?: { notify_recipient?: string },
+  ): Promise<RecorderCompileResponse> {
     const res = await authenticatedFetch(`${API_URL}/api/recorder/sessions/${encodeURIComponent(sessionId)}/compile`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(opts || {}),
     })
     if (!res.ok) await handleApiError(res, 'Failed to compile recording')
     return res.json()

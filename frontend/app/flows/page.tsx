@@ -3376,7 +3376,7 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
   // /api/recorder/sessions/{id}/compile.
   const [groupRecorderOpen, setGroupRecorderOpen] = useState(false)
 
-  function insertCompiledGroup(compiled: { group_node: any; child_nodes: any[] }) {
+  function insertCompiledGroup(compiled: { group_node: any; child_nodes: any[]; trailing_nodes?: any[] }) {
     const base = steps.length
     const parent: CreateFlowStepData = {
       name: compiled.group_node.name,
@@ -3401,7 +3401,20 @@ function StepBuilder({ steps, agents, contacts, personas, customTools, customSki
       allow_multi_turn: false,
       on_failure: 'continue',
     }))
-    onChange([...steps, parent, ...children])
+    // Trailing non-browser steps the recorder auto-wired (e.g. a
+    // data_transform that normalizes a captured timeline + the canonical
+    // notification). Each keeps its own declared type; notifications default
+    // to on_failure='continue' so delivery never propagates as a flow error.
+    const trailing: CreateFlowStepData[] = (compiled.trailing_nodes || []).map((t, i) => ({
+      name: t.name,
+      type: t.type as StepType,
+      position: base + 2 + children.length + i,
+      config: t.config_json as FlowStepConfig,
+      timeout_seconds: t.timeout_seconds,
+      allow_multi_turn: false,
+      ...(t.on_failure ? { on_failure: t.on_failure as CreateFlowStepData['on_failure'] } : {}),
+    }))
+    onChange([...steps, parent, ...children, ...trailing])
     setShowAddStep(false)
   }
 

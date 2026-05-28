@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — Browser Recorder "Capture timeline": structured tracking flows from the UI alone (2026-05-28)
+
+Rebuilding the canonical Correios → @Vini flow **entirely through the recorder UI** (no API/DB/script bypass, no hand-written config) surfaced that the recorder couldn't produce the structured tracking message on its own — the previous "working" flow #271 was hand-built with an `execute_script` parser + `data_transform` + a hand-written notification template. This release lets the recorder produce that whole pipeline from the UI.
+
+- **New "📋 Capture timeline" marker** (`frontend/app/flows/recorder/ToolPalette.tsx`, `StreamCanvas.tsx`, `RecorderDialog.tsx`). Drag a box over a tracking/event timeline (e.g. the Correios SEDEX history). It records a `marker.extract` with `capture_kind:"timeline"`.
+- **Compiler emits a structured `execute_script` parser** (`backend/browser_recorder/event_compiler.py`) instead of a plain innerText extract: it returns `events[]`, `latest_status`/`latest_at`/`latest_location`, `event_count`, and a **deterministic FNV-1a `latest_event_key`** dedupe slug (same delivered event → same key, e.g. `22-05-2026-15-46:objeto-entregue-ao-destinata:yl79uz`). The recorded tracking code parameterizes the parser; the marked root falls back to a content container, and the parser itself falls back to `document` at runtime.
+- **Auto-wired trailing steps:** the recorder appends a `normalize_tracking` `data_transform` (surfacing the parser output as `data_preview.*`) and a `notification` whose template is the canonical `Status/When/Location/Events/Dedupe` message (**no footer**). A new **"Notify on finish"** field in the recorder supplies the recipient (e.g. `@Vini`). `POST /api/recorder/sessions/{id}/compile` now accepts `{notify_recipient}` and the `flow_group` shape gained `trailing_nodes`.
+- **BUG-780 — empty-selector `wait_for` fixed:** the timeline path always targets a concrete root (marked content selector, else `#tabs-rastreamento`); the captcha-chain auto-wait now refuses empty/whitespace selectors (root cause of flow #271 run #50171's `wait_for_selector … css selector ""` failure). `_looks_like_result_region` promoted to module scope.
+- **Stale `BUGS.md` corrected:** the BUG-767..771 fix PRs (#214/#216) merged on 2026-05-27 but their detail sections still read "Open" — flipped to Resolved.
+- **Tests:** 5 new compiler unit tests in `backend/tests/test_browser_recorder_compiler.py` (46 pass total). Verified end-to-end through the UI: flow #277 (`UI Recorder V8b`) run #50173 delivered the exact canonical message to the local @Vini tester (`+5527999616279`).
+- **Known limitation (documented):** when driving the recorder from automation tooling (Playwright/Claude-in-Chrome), per-keystroke typing can amplify (BUG-778); use the canvas **paste** path for text entry. Recorder session cold-start is ~65s with no progress indicator (BUG-781), and leaked idle sessions can consume the per-tenant cap (BUG-782) — both deferred.
+
 ### Removed (breaking) — Finan migration cleanup: 3 step types, 8 flows, 2 DB tables (2026-05-27)
 
 The "Finan" migration (importing automations from a sister `../finan` project) had added bespoke, site-specific machinery on top of generic Flow primitives instead of keeping the surface generic. This release rips out that patchwork:

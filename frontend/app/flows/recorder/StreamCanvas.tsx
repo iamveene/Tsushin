@@ -21,8 +21,8 @@ interface StreamCanvasProps {
   onPointer?: (event: PointerInput) => void
   onKey?: (event: KeyInput) => void
   onText?: (text: string) => void
-  onRectMark?: (rect: { x: number; y: number; width: number; height: number; kind: 'captcha' | 'extract' }) => void
-  markerMode?: 'captcha' | 'extract' | null
+  onRectMark?: (rect: { x: number; y: number; width: number; height: number; kind: 'captcha' | 'extract' | 'timeline' }) => void
+  markerMode?: 'captcha' | 'extract' | 'timeline' | null
   framePort: { latestFrame: RecorderFrame | null }
 }
 

@@ -10,7 +10,7 @@
  * current marker mode and forwards user gestures to the StreamCanvas.
  */
 
-export type MarkerMode = 'captcha' | 'extract' | null
+export type MarkerMode = 'captcha' | 'extract' | 'timeline' | null
 
 interface ToolPaletteProps {
   markerMode: MarkerMode
@@ -30,6 +30,7 @@ export default function ToolPalette({
 }: ToolPaletteProps) {
   const captchaActive = markerMode === 'captcha'
   const extractActive = markerMode === 'extract'
+  const timelineActive = markerMode === 'timeline'
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
@@ -61,6 +62,20 @@ export default function ToolPalette({
         👁 Capture output
       </button>
 
+      <button
+        type="button"
+        onClick={() => onModeChange(timelineActive ? null : 'timeline')}
+        className={
+          `${baseBtn} ` +
+          (timelineActive
+            ? 'border-cyan-400 bg-cyan-500/20 text-cyan-200'
+            : 'border-slate-600 bg-slate-800/50 text-slate-300 hover:border-cyan-500/50 hover:text-cyan-200')
+        }
+        title="Drag a box over a tracking/event timeline (e.g. the Correios SEDEX history). The runtime parses it into structured events + a dedupe key for the notification."
+      >
+        📋 Capture timeline
+      </button>
+
       {onOpenVaultPicker && (
         <button
           type="button"
@@ -74,7 +89,11 @@ export default function ToolPalette({
 
       {markerMode && (
         <span className="text-xs text-slate-400 italic">
-          Drag a box over the {markerMode === 'captcha' ? 'captcha image' : 'text to capture'}…
+          Drag a box over the {markerMode === 'captcha'
+            ? 'captcha image'
+            : markerMode === 'timeline'
+              ? 'tracking/event timeline'
+              : 'text to capture'}…
         </span>
       )}
     </div>

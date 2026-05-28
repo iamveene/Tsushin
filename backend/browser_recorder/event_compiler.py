@@ -13,6 +13,7 @@ The dict is ready to assign to `FlowNode.config_json` (after `json.dumps`).
 
 from __future__ import annotations
 
+import json
 from typing import Any, Iterable, Optional
 
 from .models import RecordedEvent
@@ -23,6 +24,112 @@ from .selector_strategy import is_password_field, pick_selector
 # config in BrowserAutomationConfigPanel.
 _DEFAULT_TIMEOUT_PER_STEP = 15
 _BASE_TIMEOUT = 30
+
+
+# ---------------------------------------------------------------------------
+# Structured "event timeline" capture
+# ---------------------------------------------------------------------------
+#
+# A plain `marker.extract` compiles to `tool_action: extract` = innerText of
+# the marked region. That's fine for a single value, but postal-tracking
+# pages render a *timeline* of events, and the canonical notification needs
+# structured fields (latest status/when/location, an event count, and a
+# stable dedupe key). When the user marks the timeline region with the
+# "timeline" capture kind, the recorder compiles an `execute_script` node
+# whose JS parses the timeline into that structured shape — so a recording
+# made entirely through the UI yields the same structured message a
+# hand-authored flow would, with no manual config.
+#
+# The parser is resilient: it resolves a root from the marked selector and
+# falls back to the Correios container / document, then reads the common
+# ".ship-steps li.step" timeline shape. `latest_event_key` is a deterministic
+# FNV-1a hash so re-runs on the same delivered event produce the same dedupe
+# slug (e.g. "22-05-2026-15-46:objeto-entregue-ao-destinata:yl79uz").
+_TIMELINE_PARSER_JS = r"""() => {
+  const tracking_code = __TRACKING_CODE_JSON__;
+  const root = document.querySelector(__ROOT_SELECTOR_JSON__) || document.querySelector('#tabs-rastreamento') || document.body;
+  const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const slug = (value) => clean(value)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+  const hash = (value) => {
+    let h = 2166136261;
+    const text = String(value || '');
+    for (let i = 0; i < text.length; i += 1) {
+      h ^= text.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0).toString(36);
+  };
+  const parseEvent = (node, index) => {
+    const status = clean(node.querySelector('.text-head')?.textContent || node.querySelector('strong')?.textContent || node.querySelector('h3, h4, h5')?.textContent || '');
+    const text = clean(node.textContent || '');
+    const dateMatch = text.match(/(\d{2}\/\d{2}\/\d{4})\s*(?:às|as)?\s*(\d{2}:\d{2})?/i);
+    const at = dateMatch ? [dateMatch[1], dateMatch[2]].filter(Boolean).join(' ') : '';
+    const fragments = Array.from(node.querySelectorAll('p, span, div')).map((el) => clean(el.textContent)).filter(Boolean).filter((value, idx, all) => all.indexOf(value) === idx);
+    const location = fragments.find((value) => value !== status && value !== at && /(Unidade|Agência|Agencia|Centro|CTE|CDD|CEE|Objeto|BRASIL|[A-Z]{2}$)/.test(value)) || '';
+    return { index, status, at, location, text };
+  };
+  const nodes = Array.from(root?.querySelectorAll('.ship-steps li.step, .ship-steps li, li.step') || []);
+  const events = nodes.map(parseEvent).filter((event) => event.status || event.text);
+  const latest = events[0] || {};
+  const latest_status = latest.status || latest.text || '';
+  const latest_at = latest.at || '';
+  const latest_location = latest.location || '';
+  const full_event_key = [latest_status, latest_at, latest_location].map(slug).filter(Boolean).join(':') || 'no-event';
+  const latest_event_key = [slug(latest_at).slice(0, 16) || 'no-date', slug(latest_status).slice(0, 28) || 'status', hash([latest_status, latest_at, latest_location, latest.text].join('|'))].join(':').slice(0, 64);
+  return {
+    tracking_code,
+    latest_status,
+    latest_at,
+    latest_location,
+    event_count: events.length,
+    events,
+    latest_event_key,
+    full_event_key,
+    record_kind: 'postal_tracking_status',
+    provider: 'correios',
+    subject_key: tracking_code,
+    period_key: latest_event_key,
+    status: latest_status || 'unknown',
+    title: `Correios ${tracking_code} - ${latest_status || 'unknown'}`,
+    dedupe_key: `postal_tracking_status:correios:${tracking_code}:${latest_event_key}`
+  };
+}"""
+
+
+def _timeline_parser_script(tracking_code: str, root_selector: str) -> str:
+    """Render the timeline parser JS with the recorded code + marked root."""
+    return (
+        _TIMELINE_PARSER_JS
+        .replace("__TRACKING_CODE_JSON__", json.dumps(tracking_code or ""))
+        .replace("__ROOT_SELECTOR_JSON__", json.dumps(root_selector or "#tabs-rastreamento"))
+    )
+
+
+def _tracking_code_from_rows(selectors: list[dict[str, Any]]) -> str:
+    """Pull the recorded tracking code from the fill rows.
+
+    Prefers a fill whose selector names the tracking input (`objeto`), else
+    the first non-vault fill value. This is the value the user actually
+    typed during recording — never hardcoded.
+    """
+    fallback = ""
+    for row in selectors:
+        if row.get("action") != "fill":
+            continue
+        value = str(row.get("value") or "")
+        if not value or value.startswith(("pvh_", "op://")):
+            continue
+        sel = (row.get("selector") or "").lower()
+        if "objeto" in sel:
+            return value
+        if not fallback:
+            fallback = value
+    return fallback
 
 
 def _slugify(text: str, default: str = "captured") -> str:
@@ -136,6 +243,28 @@ def _row_click(meta: Optional[dict], selector_hint: Optional[str]) -> dict[str, 
 _ROOT_SELECTORS = {"body", "html", "*", "document"}
 
 
+def _looks_like_result_region(sel: str) -> bool:
+    """True if a selector names a content/result region (not page chrome).
+
+    Used to (a) decide whether a captcha success_selector / auto wait_for is
+    trustworthy and (b) pick the timeline parser's root. On captcha-gated
+    sites the results don't render at record-time, so a marked selector often
+    resolves to noise (a carousel) — we only trust content-looking selectors
+    and otherwise fall back to a known container.
+    """
+    s = (sel or "").lower()
+    if not s:
+        return False
+    for keyword in (
+        "ship-step", "ship_step", "result", "tracking",
+        "rastreamento", "evento", "events", "timeline",
+        "status-list", "history",
+    ):
+        if keyword in s:
+            return True
+    return False
+
+
 def _row_fill(payload: dict[str, Any]) -> dict[str, Any]:
     meta = payload.get("field_meta") or {}
     primary, fallback = pick_selector(meta)
@@ -201,6 +330,12 @@ def _row_extract(payload: dict[str, Any]) -> dict[str, Any]:
         "selector": primary,
         "as": as_name,
     }
+    # A "timeline" capture means the user marked an event list (e.g. a
+    # postal-tracking timeline). It compiles to a structured execute_script
+    # parser instead of a plain innerText extract — see
+    # compile_events_into_nodes.
+    if str(payload.get("capture_kind") or "").strip() == "timeline":
+        row["capture_kind"] = "timeline"
     if fallback and fallback != primary:
         row["fallback_selector"] = fallback
     return row
@@ -536,6 +671,9 @@ def compile_events_into_nodes(events: Iterable[RecordedEvent]) -> list[dict[str,
                 })
 
     nodes: list[dict[str, Any]] = []
+    # The recorded tracking code (typed into the `objeto` input) parameterizes
+    # the timeline parser + the notification subject. Never hardcoded.
+    tracking_code = _tracking_code_from_rows(pruned_selectors)
 
     # First node: navigate (if we have an initial URL)
     if initial_url:
@@ -552,6 +690,50 @@ def compile_events_into_nodes(events: Iterable[RecordedEvent]) -> list[dict[str,
     # One node per selector row (single-row selectors[])
     for idx, row in enumerate(pruned_selectors):
         action = row.get("action") or "navigate"
+
+        # Structured "event timeline" capture → wait_for(root) +
+        # execute_script(parser). The wait_for always targets a concrete
+        # content selector (the marked root, or the Correios container as a
+        # fallback) so it never compiles to an empty selector that fails at
+        # replay. The execute_script returns the structured tracking object a
+        # downstream data_transform + notification template consume.
+        if action == "extract" and row.get("capture_kind") == "timeline":
+            # The marked selector is only trusted when it looks like a content
+            # region — on a captcha-gated page the timeline isn't rendered at
+            # record-time, so a marked point often resolves to chrome
+            # (carousel/footer). Fall back to the Correios container; the
+            # parser JS itself also falls back to document at runtime.
+            marked = (row.get("selector") or "").strip()
+            root_sel = marked if _looks_like_result_region(marked) else "#tabs-rastreamento"
+            wait_cfg = _node_base(profile, "wait_for", timeout=30)
+            wait_cfg["selectors"] = [{
+                "action": "wait_for",
+                "selector": root_sel,
+                "state": "visible",
+                "timeout_ms": 30000,
+            }]
+            nodes.append({
+                "name": "wait_tracking_result",
+                "type": "browser_automation",
+                "config_json": wait_cfg,
+                "timeout_seconds": 30,
+                "_recorder_position": len(nodes) + 1,
+            })
+            es_cfg = _node_base(profile, "execute_script", timeout=60)
+            es_cfg["selectors"] = {"extraction_root": root_sel}
+            es_cfg["output_alias"] = "extract_tracking"
+            es_cfg["tool_arguments"] = {
+                "script": _timeline_parser_script(tracking_code, root_sel),
+            }
+            nodes.append({
+                "name": "extract_tracking",
+                "type": "browser_automation",
+                "config_json": es_cfg,
+                "timeout_seconds": 60,
+                "_recorder_position": len(nodes) + 1,
+            })
+            continue
+
         # tool_action mapping — most actions are 1:1; navigate inside
         # selectors[] (mid-recording redirect) becomes a navigate FlowNode
         # whose top-level url comes from the row's selector field.
@@ -718,19 +900,8 @@ def _combine_captcha_chain(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     # before the page settles. Restrict success_selector to selectors that
     # look like content regions; otherwise leave it unset and let the
     # subsequent wait_for step (auto-inserted below if missing) gate things.
-    def _looks_like_result_region(sel: str) -> bool:
-        s = (sel or "").lower()
-        if not s:
-            return False
-        for keyword in (
-            "ship-step", "ship_step", "result", "tracking",
-            "rastreamento", "evento", "events", "timeline",
-            "status-list", "history",
-        ):
-            if keyword in s:
-                return True
-        return False
-
+    # (`_looks_like_result_region` is module-level so the timeline-capture
+    # path can reuse the same content-region heuristic.)
     result_sel = extract_sel if _looks_like_result_region(extract_sel or "") else None
 
     # BUG-776: if the recorder didn't capture a wait_for step between
@@ -745,7 +916,15 @@ def _combine_captcha_chain(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if (nodes[i].get("config_json") or {}).get("tool_action") in ("wait_for", "wait_for_url"):
                 has_wait_between = True
                 break
-        if not has_wait_between and _looks_like_result_region(extract_sel or ""):
+        # Never auto-insert a wait_for with an empty/whitespace selector — at
+        # replay that raises `wait_for_selector: Unexpected token "" while
+        # parsing css selector ""` (observed on flow #271 run #50171). Require
+        # a concrete content-region selector.
+        if (
+            not has_wait_between
+            and (extract_sel or "").strip()
+            and _looks_like_result_region(extract_sel or "")
+        ):
             wait_cfg = _node_base(
                 (cfg_captcha.get("browser_session_profile_name") or ""),
                 "wait_for",
@@ -903,10 +1082,69 @@ def _action_screenshots(events: list[RecordedEvent]) -> list[Optional[str]]:
     return out
 
 
+def _notify_slug(recipient: str) -> str:
+    base = _slugify((recipient or "").lstrip("@"), default="recipient")
+    return f"notify_{base}"[:48]
+
+
+def _build_tracking_trailing_nodes(
+    tracking_code: str,
+    notify_recipient: Optional[str],
+) -> list[dict[str, Any]]:
+    """Trailing data_transform + notification for a timeline-capture flow.
+
+    These ride AFTER the browser group so the recorder, driven entirely from
+    the UI, produces the full canonical pipeline: the execute_script node
+    returns the structured tracking object; `normalize_tracking` surfaces it
+    as `data_preview.*`; the notification templates the canonical message.
+    No footer — the message ends at the Dedupe line.
+    """
+    normalize = {
+        "name": "normalize_tracking",
+        "type": "data_transform",
+        "config_json": {
+            "transform_mode": "json_path",
+            "source_step": "extract_tracking",
+            "source_path": "metadata.result",
+            "output_alias": "normalize_tracking",
+        },
+        "timeout_seconds": 15,
+    }
+    nodes: list[dict[str, Any]] = [normalize]
+
+    recipient = (notify_recipient or "").strip()
+    if recipient:
+        code = tracking_code or ""
+        message_template = (
+            f"Correios {code} update\n"
+            "Status: {{normalize_tracking.data_preview.latest_status}}\n"
+            "When: {{normalize_tracking.data_preview.latest_at}}\n"
+            "Location: {{normalize_tracking.data_preview.latest_location}}\n"
+            "Events: {{normalize_tracking.data_preview.event_count}}\n"
+            "Dedupe: {{normalize_tracking.data_preview.latest_event_key}}"
+        )
+        nodes.append({
+            "name": _notify_slug(recipient),
+            "type": "notification",
+            "config_json": {
+                "channel": "whatsapp",
+                "recipient": recipient,
+                "recipients": [recipient],
+                "message_template": message_template,
+            },
+            "timeout_seconds": 30,
+            # Per user-guide §9 the trailing notification observes the flow's
+            # result; it must never propagate its own delivery failure.
+            "on_failure": "continue",
+        })
+    return nodes
+
+
 def compile_events_into_group(
     events: Iterable[RecordedEvent],
     *,
     recording_id: str,
+    notify_recipient: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Return a `browser_group` parent + annotated child nodes.
 
@@ -974,4 +1212,25 @@ def compile_events_into_group(
         "timeout_seconds": 5,
         "_recorder_position": 0,
     }
-    return {"group_node": group_node, "child_nodes": children}
+
+    # When the recording captured a structured "event timeline", auto-wire the
+    # trailing data_transform + notification so the UI-only recording yields
+    # the full canonical pipeline. These live OUTSIDE the browser group (they
+    # aren't browser steps) and the caller inserts them after the children.
+    has_timeline = any(
+        (c.get("config_json") or {}).get("output_alias") == "extract_tracking"
+        and (c.get("config_json") or {}).get("tool_action") == "execute_script"
+        for c in children
+    )
+    trailing_nodes: list[dict[str, Any]] = []
+    if has_timeline:
+        tracking_code = _tracking_code_from_rows(
+            (compile_events(event_list).get("selectors") or [])
+        )
+        trailing_nodes = _build_tracking_trailing_nodes(tracking_code, notify_recipient)
+
+    return {
+        "group_node": group_node,
+        "child_nodes": children,
+        "trailing_nodes": trailing_nodes,
+    }
