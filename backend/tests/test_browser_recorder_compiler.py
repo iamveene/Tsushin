@@ -968,43 +968,28 @@ def test_timeline_wait_for_is_non_empty():
     assert actions.index("solve_captcha") < actions.index("wait_for") < actions.index("execute_script")
 
 
-def test_timeline_group_wires_normalize_and_notification():
-    group = compile_events_into_group(
-        _events_timeline_shaped(), recording_id="rec1", notify_recipient="@Vini"
-    )
+def test_timeline_group_wires_normalize_variable_only():
+    # Decoupled recorder: a "Capture timeline" recording exposes the parsed
+    # tracking object as the reusable `normalize_tracking` variable and must
+    # NOT wire a notification — sending is a separate, user-added Notification
+    # flow step that references {{normalize_tracking.data_preview.*}}.
+    group = compile_events_into_group(_events_timeline_shaped(), recording_id="rec1")
     trailing = group.get("trailing_nodes") or []
     types = [t["type"] for t in trailing]
-    assert types == ["data_transform", "notification"], types
-    normalize = trailing[0]["config_json"]
-    assert normalize["source_step"] == "extract_tracking"
-    assert normalize["source_path"] == "metadata.result"
-    assert normalize["output_alias"] == "normalize_tracking"
-    notify = trailing[1]
-    assert notify["name"] == "notify_vini"
-    assert notify["config_json"]["recipient"] == "@Vini"
-    assert notify.get("on_failure") == "continue"
-    tmpl = notify["config_json"]["message_template"]
-    assert tmpl.startswith("Correios AD468811215BR update")
-    assert "Status: {{normalize_tracking.data_preview.latest_status}}" in tmpl
-    assert "Dedupe: {{normalize_tracking.data_preview.latest_event_key}}" in tmpl
-    # No footer — the message ends at the Dedupe line.
-    assert tmpl.rstrip().endswith("{{normalize_tracking.data_preview.latest_event_key}}")
-    assert "sent via" not in tmpl and "BUGS" not in tmpl
-
-
-def test_timeline_group_without_recipient_emits_normalize_only():
-    group = compile_events_into_group(
-        _events_timeline_shaped(), recording_id="rec1", notify_recipient=None
-    )
-    trailing = group.get("trailing_nodes") or []
-    assert [t["type"] for t in trailing] == ["data_transform"]
+    assert types == ["data_transform"], types
+    normalize = trailing[0]
+    assert normalize["name"] == "normalize_tracking"
+    cfg = normalize["config_json"]
+    assert cfg["source_step"] == "extract_tracking"
+    assert cfg["source_path"] == "metadata.result"
+    assert cfg["output_alias"] == "normalize_tracking"
+    # The recorder no longer emits any notification node.
+    assert "notification" not in types
 
 
 def test_no_timeline_means_no_trailing_nodes():
-    # Plain extract (no capture_kind) must NOT auto-wire normalize/notification.
-    group = compile_events_into_group(
-        _events_correios_shaped(), recording_id="rec1", notify_recipient="@Vini"
-    )
+    # Plain extract (no capture_kind) must NOT auto-wire the normalize step.
+    group = compile_events_into_group(_events_correios_shaped(), recording_id="rec1")
     assert (group.get("trailing_nodes") or []) == []
 
 

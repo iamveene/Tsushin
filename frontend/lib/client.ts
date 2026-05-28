@@ -11747,12 +11747,11 @@ export const api = {
 
   async compileRecorderSession(
     sessionId: string,
-    opts?: { notify_recipient?: string },
   ): Promise<RecorderCompileResponse> {
     const res = await authenticatedFetch(`${API_URL}/api/recorder/sessions/${encodeURIComponent(sessionId)}/compile`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(opts || {}),
+      body: JSON.stringify({}),
     })
     if (!res.ok) await handleApiError(res, 'Failed to compile recording')
     return res.json()
