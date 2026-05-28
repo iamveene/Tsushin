@@ -922,7 +922,7 @@ Whichever trail you pick, the output writes into the same `FlowStepConfig` shape
 
 - **▣ Mark captcha** drags a box over a captcha image and emits a `solve_captcha` row pointing at the next captured fill — exactly the shape the official Correios postal-tracking flow needs.
 - **👁 Capture output** drags over a text region and emits an `extract` row with a named output variable for downstream steps.
-- **📋 Capture timeline** drags over a tracking/event timeline (e.g. the Correios SEDEX history) and compiles a structured `execute_script` parser instead of a plain text extract. It returns an `events[]` list plus `latest_status`/`latest_at`/`latest_location`, an `event_count`, and a deterministic dedupe key (`latest_event_key`). Pair it with the **Notify on finish** field (top of the recorder, e.g. `@Vini`) and the recorder auto-appends a `normalize_tracking` Data Transform + a Notification whose template is the canonical `Status/When/Location/Events/Dedupe` message — so a recording made entirely from the UI delivers the structured update with no manual config.
+- **📋 Capture timeline** drags over a tracking/event timeline (e.g. the Correios SEDEX history) and compiles a structured `execute_script` parser instead of a plain text extract. It returns an `events[]` list plus `latest_status`/`latest_at`/`latest_location`, an `event_count`, and a deterministic dedupe key (`latest_event_key`). The recorder auto-appends a `normalize_tracking` Data Transform that **exposes the parsed object as the reusable flow variable `{{normalize_tracking.data_preview.*}}`** (`latest_status`, `latest_at`, `latest_location`, `event_count`, `latest_event_key`, `tracking_code`). The recorder does **not** send anything — to deliver the update, add a **Notification** step after the recording (next section, step 10) and reference those fields. (Decoupling rationale: sending is the first-class Notification step's job; the recorder just produces the data, so the same variable can feed any channel.)
 - **🔑 Vault?** chip appears on any captured fill whose field name or `type=password` suggests a credential. Click it to open the existing Password Vault picker; the plaintext value gets swapped for the picker's `op://` reference and a row is added to `browser_secret_references`. The Save button refuses to compile if any plaintext password remains.
 - **▾ Agentic mode** (opt-in; requires `browser-use` from `requirements-optional.txt`) lets a Browser-Use agent drive the same recording session from a free-form prompt. Pause/resume hands control back to you mid-run. The compiled output is bit-for-bit shaped like a human recording. Requires an Anthropic Provider Instance configured under Hub > Providers for the tenant; the recorder surfaces a 503 with a setup hint when missing.
 
@@ -944,7 +944,18 @@ This is the canonical browser-automation flow shipped with Tsushin. It pulls pac
    - `fill input[name="captcha"]` value=`XXXXXX` (runtime overwrites with OCR result)
    - `click button[name="b-pesquisar"]`
    - `extract <result panel selector>` as=`delivery_status`
-10. **Add a Notification step at the bottom** so you actually find out the flow ran. Click *+ Add step* → choose **Notification** → set channel `whatsapp`, recipient `@Vini` (or whichever contact handle), and a template like `Correios {{step_1.url}} → {{step_1.delivery_status}}`. This is a project-wide convention: every browser-automation flow should end with a notification so the success/failure is observable. A silent flow is indistinguishable from a flow that didn't run.
+10. **Add a Notification step at the bottom** so you actually find out the flow ran. Click *+ Add step* → choose **Notification** → set channel `whatsapp`, recipient `@Vini` (or whichever contact handle). For a **📋 Capture timeline** recording, reference the `normalize_tracking` variable the recorder exposed — the canonical message (no footer):
+
+    ```
+    Correios {{normalize_tracking.data_preview.tracking_code}} update
+    Status: {{normalize_tracking.data_preview.latest_status}}
+    When: {{normalize_tracking.data_preview.latest_at}}
+    Location: {{normalize_tracking.data_preview.latest_location}}
+    Events: {{normalize_tracking.data_preview.event_count}}
+    Dedupe: {{normalize_tracking.data_preview.latest_event_key}}
+    ```
+
+    (For a plain **👁 Capture output** extract, reference its named variable instead, e.g. `{{step_1.delivery_status}}`.) The Notification step's **Variable Reference {x}** panel lists the available previous-step fields. This is a project-wide convention: every browser-automation flow should end with a notification so the success/failure is observable. A silent flow is indistinguishable from a flow that didn't run.
 11. Click **Update Flow** at the top of the editor. Done — when this flow executes, the recorder replays the recorded actions, the runtime solves the live captcha, and the notification step pings you with the extracted `delivery_status`.
 
 Alternative: under **▾ Agentic mode**, paste the prompt *"Track Brazilian postal package AD468811215BR. Fill the tracking code in the search field, mark the CAPTCHA image, and click Consultar."* and click Start. The agent drives steps 4–8 for you while you watch. Take over at any point with the Pause button. Don't forget to still append the Notification step manually before saving — the recorder doesn't add it for you.

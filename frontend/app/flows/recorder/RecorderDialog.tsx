@@ -82,12 +82,6 @@ export default function RecorderDialog({
   // from the instant Start is clicked until the session id comes back.
   const [starting, setStarting] = useState(false)
   const [startSeconds, setStartSeconds] = useState(0)
-  // Optional WhatsApp recipient for the auto-wired completion notification.
-  // When set AND the recording includes a "Capture timeline" marker, the
-  // compiler appends the canonical normalize + notification steps so the
-  // UI-only recording delivers the structured tracking message with no
-  // manual config.
-  const [notifyRecipient, setNotifyRecipient] = useState('')
   // Vault picker state — opened from a StepLedger "🔑 Vault?" chip.
   // Holds the selector of the row we're wiring so the marker.vault event
   // dispatched on accept targets the correct fill row.
@@ -288,11 +282,7 @@ export default function RecorderDialog({
     if (!sessionId) return
     setSavePending(true)
     try {
-      const trimmedRecipient = notifyRecipient.trim()
-      const resp = await api.compileRecorderSession(
-        sessionId,
-        trimmedRecipient ? { notify_recipient: trimmedRecipient } : undefined,
-      )
+      const resp = await api.compileRecorderSession(sessionId)
       // When the parent has opted into group insertion AND the recorder
       // produced any compilable actions, insert the parent + children at
       // the flow level. Falls back to the legacy single-step merge if
@@ -319,7 +309,7 @@ export default function RecorderDialog({
     } finally {
       setSavePending(false)
     }
-  }, [notifyRecipient, onApply, onClose, onInsertGroup, sessionId])
+  }, [onApply, onClose, onInsertGroup, sessionId])
 
   const handleClear = useCallback(() => setEvents([]), [])
 
@@ -439,6 +429,15 @@ export default function RecorderDialog({
                 {agenticExpanded ? '▾' : '▸'} Agentic mode
               </button>
             </div>
+            <div className="text-[11px] text-slate-400 rounded-md border border-slate-700/60 bg-slate-800/30 px-2.5 py-1.5 leading-relaxed">
+              <span className="text-slate-300 font-medium">How to record:</span>{' '}
+              <span className="text-slate-500">①</span> click the target field &amp; type or paste its value (e.g. a tracking code){'  '}
+              <span className="text-slate-500">②</span> when the page shows a captcha, click{' '}
+              <span className="text-amber-300">▣ Mark captcha</span> and drag a box over the captcha <em>image</em> (the squiggly text), then click into its answer box{'  '}
+              <span className="text-slate-500">③</span> submit, then click{' '}
+              <span className="text-cyan-300">📋 Capture timeline</span> and drag over the results / event list{'  '}
+              <span className="text-slate-500">④</span> Save — then add a Notification step to send the captured data.
+            </div>
             {agenticExpanded && (
               <AgenticTab
                 sessionId={sessionId}
@@ -448,17 +447,13 @@ export default function RecorderDialog({
                 onPaused={setAgentPaused}
               />
             )}
-            <div className="flex items-center gap-2 text-xs">
-              <label className="text-slate-400 shrink-0 uppercase font-medium text-[11px]">Notify on finish</label>
-              <input
-                type="text"
-                value={notifyRecipient}
-                onChange={(e) => setNotifyRecipient(e.target.value)}
-                placeholder="@Vini (optional)"
-                className="w-48 px-2.5 py-1.5 bg-slate-800 border border-slate-600 rounded-md text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
-              />
-              <span className="text-[10px] text-slate-500 italic">
-                Pairs with 📋 Capture timeline → sends the structured tracking update on completion.
+            <div className="flex items-start gap-2 text-[11px] text-slate-500 rounded-md border border-slate-700/60 bg-slate-800/30 px-2.5 py-1.5">
+              <span className="text-cyan-400/80 shrink-0">ⓘ</span>
+              <span>
+                <span className="text-slate-400">📋 Capture timeline</span> exposes the parsed tracking object as the{' '}
+                <code className="text-cyan-300/90">{'{{normalize_tracking.data_preview.*}}'}</code> variable
+                (<span className="text-slate-400">latest_status, latest_at, latest_location, event_count, latest_event_key, tracking_code</span>).
+                {' '}To send it, add a <span className="text-slate-300">Notification</span> step after this recording and reference those fields.
               </span>
             </div>
           </>
