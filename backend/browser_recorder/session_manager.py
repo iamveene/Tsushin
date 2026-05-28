@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from typing import Optional
 
@@ -103,6 +104,36 @@ class SessionRegistry:
     # genuinely needs more.
     MAX_PER_TENANT = 2
 
+    # BUG-782: a session whose WebSocket relay has detached (tab closed,
+    # navigated away without Discard) is orphaned — nobody is watching it,
+    # yet it holds a per-tenant slot until the 30-min idle TTL expires, so a
+    # fresh Start hits a 409 for half an hour. Reap such sessions after a
+    # short grace (covers brief WS reconnect blips; an actively-recorded
+    # session keeps relay_send set and is never reaped).
+    ORPHAN_GRACE_SECONDS = 90
+
+    def _reap_for_tenant_locked(self, tenant_id: str) -> list[RecordingSession]:
+        """Pop expired (TTL) + orphaned sessions for a tenant. Caller holds the lock.
+
+        Orphaned = no WebSocket relay attached AND idle past ORPHAN_GRACE_SECONDS
+        (BUG-782) — i.e. a recording whose tab was closed/navigated away without
+        Discard. An actively-recorded session keeps `relay_send` set and is never
+        reaped here. Returned sessions are torn down OFF-lock by the caller.
+        """
+        now = time.time()
+        popped: list[RecordingSession] = []
+        for sid in list(self._sessions.keys()):
+            sess = self._sessions[sid]
+            if sess.tenant_id != tenant_id:
+                continue
+            orphaned = (
+                sess.relay_send is None
+                and (now - sess.last_active_at) > self.ORPHAN_GRACE_SECONDS
+            )
+            if sess.is_expired() or orphaned:
+                popped.append(self._sessions.pop(sid))
+        return popped
+
     def _release_pending(self, tenant_id: str) -> None:
         """Decrement the in-flight create() counter. Caller holds the lock."""
         remaining = self._pending_by_tenant.get(tenant_id, 0) - 1
@@ -122,15 +153,11 @@ class SessionRegistry:
         # Reserve a slot atomically before doing any slow setup. Two
         # concurrent POSTs used to both pass the count check before either
         # one inserted, blowing past the cap.
-        expired_to_cleanup: list[RecordingSession] = []
         async with self._lock:
-            # Sweep expired inline so a slow janitor cycle can't
-            # artificially block new recordings. We pop now, teardown
-            # off-lock below.
-            for sid in list(self._sessions.keys()):
-                sess = self._sessions[sid]
-                if sess.tenant_id == tenant_id and sess.is_expired():
-                    expired_to_cleanup.append(self._sessions.pop(sid))
+            # Sweep expired AND orphaned sessions inline so a slow janitor
+            # cycle (or an abandoned tab) can't artificially block new
+            # recordings. We pop now, teardown off-lock below.
+            expired_to_cleanup = self._reap_for_tenant_locked(tenant_id)
 
             active = sum(1 for s in self._sessions.values() if s.tenant_id == tenant_id)
             pending = self._pending_by_tenant.get(tenant_id, 0)

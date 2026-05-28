@@ -72,6 +72,10 @@ export default function StreamCanvas({
   const imgRef = useRef<HTMLImageElement | null>(null)
   const dragStateRef = useRef<{ startX: number; startY: number; active: boolean } | null>(null)
   const lastDrawnFrameRef = useRef<string | null>(null)
+  // BUG-778: remembers the last handled keydown (key + event.timeStamp) so a
+  // duplicate dispatch of the same physical event is dropped without eating
+  // legitimately-repeated characters (which carry distinct timeStamps).
+  const lastKeyRef = useRef<{ key: string; ts: number } | null>(null)
 
   // Paint loop — RAF re-draws whenever a new frame arrives. We keep the
   // <img> element so the browser decodes JPEG asynchronously off the main
@@ -240,6 +244,17 @@ export default function StreamCanvas({
   // no per-keystroke noise).
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLCanvasElement>) => {
     e.preventDefault()
+    // BUG-778 hardening for automation-driven typing (Playwright /
+    // Claude-in-Chrome): drop OS auto-repeat keydowns and drop a keydown that
+    // carries the SAME (key,timeStamp) as the one just handled — a duplicate
+    // dispatch of one physical event. Distinct fast keystrokes (a real
+    // "88"/"11") always carry different timeStamps, so this never eats real
+    // input. For bulk text under automation, the onPaste path remains the
+    // one-envelope, amplification-proof route.
+    if (e.repeat) return
+    const last = lastKeyRef.current
+    if (last && last.key === e.key && last.ts === e.timeStamp) return
+    lastKeyRef.current = { key: e.key, ts: e.timeStamp }
     const isPrintableChar = e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey
     if (isPrintableChar) {
       onText?.(e.key)
