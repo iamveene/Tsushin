@@ -102,6 +102,31 @@ async def _resolve_focused_selector(session: RecordingSession) -> dict[str, Any]
         return {}
 
 
+async def _resolve_focused_value(session: RecordingSession) -> str | None:
+    """Read the focused element's current `.value` (BUG-785).
+
+    A `fill` event records the field's FULL value (replace semantics) instead
+    of the per-keystroke `Input.insertText` fragment. Under synthetic/automated
+    typing the canvas can emit duplicate keystrokes; appending those fragments
+    silently amplified the compiled value (e.g. "AD468811215BR" → 37 chars)
+    while the StepLedger showed the clean value — a recording that looked
+    correct compiled to a broken flow. Reading `document.activeElement.value`
+    makes the recorded value match what is actually in the field, so the ledger
+    and the compiled flow can never diverge.
+
+    Returns None when the focused node has no string `value` (caller then falls
+    back to the envelope text).
+    """
+    try:
+        return await session.page.evaluate(
+            "() => { const el = document.activeElement; "
+            "return el && typeof el.value === 'string' ? el.value : null; }"
+        )
+    except Exception as e:
+        logger.debug("Focused value resolve failed: %s", e)
+        return None
+
+
 async def _handle_client_message(
     session: RecordingSession,
     websocket: WebSocket,
@@ -217,9 +242,14 @@ async def _handle_client_message(
                 selector = focused.get("selector")
                 if not field_meta:
                     field_meta = focused.get("meta")
+        # BUG-785: record the focused field's ACTUAL value (replace semantics),
+        # not the per-envelope fragment — see _resolve_focused_value. Falls back
+        # to the envelope text when the focused node exposes no string value.
+        field_value = await _resolve_focused_value(session)
+        value = field_value if field_value is not None else text
         evt = session.append_event(
             "fill",
-            {"selector": selector, "value": text, "field_meta": field_meta},
+            {"selector": selector, "value": value, "field_meta": field_meta},
         )
         await _safe_send(websocket, _event_envelope(evt))
         return

@@ -58,13 +58,15 @@ function summarize(row: RecorderEventRow): string {
 }
 
 /**
- * BUG-769: the WebSocket stream emits one `fill` event per typed character
- * (Input.insertText fires per keystroke). Showing 13 rows for `AD468811215BR`
- * is unreadable and made it hard to spot when the selector resolution
- * actually worked. Coalesce sequential fills on the same selector into a
- * single ledger row carrying the cumulative value — matches what the
- * backend compiler already does in `_coalesce_fills` so what you see here
- * is what gets compiled.
+ * BUG-769 / BUG-785: the WebSocket stream emits one `fill` event per typed
+ * character, and each event now carries the field's FULL value at that moment
+ * (cdp_relay reads `document.activeElement.value`). Showing 13 rows for
+ * `AD468811215BR` is unreadable, so we coalesce sequential fills on the same
+ * selector into one row — keeping the LAST value (never concatenating). This
+ * mirrors the backend `_coalesce_fills` (keep-last), so the ledger shows
+ * exactly what gets compiled. Concatenating cumulative snapshots here used to
+ * render garbage like "AADAD4AD46…" under synthetic typing while the compiled
+ * value was clean — a silent ledger/compile divergence (BUG-785).
  */
 function coalesceForDisplay(events: RecorderEventRow[]): RecorderEventRow[] {
   const out: RecorderEventRow[] = []
@@ -80,7 +82,9 @@ function coalesceForDisplay(events: RecorderEventRow[]): RecorderEventRow[] {
         ...prev,
         payload: {
           ...prev.payload,
-          value: String(prev.payload?.value || '') + String(row.payload?.value || ''),
+          // Keep the latest full value (matches backend keep-last); fall back
+          // to the prior value if a later event somehow carries none.
+          value: String(row.payload?.value ?? prev.payload?.value ?? ''),
           field_meta: row.payload?.field_meta || prev.payload?.field_meta,
         },
         ts: row.ts || prev.ts,
