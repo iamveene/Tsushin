@@ -76,6 +76,12 @@ export default function RecorderDialog({
   const [events, setEvents] = useState<RecorderEventRow[]>([])
   const [savePending, setSavePending] = useState(false)
   const [markerMode, setMarkerMode] = useState<MarkerMode>(null)
+  // BUG-781: spawning the inner Chromium can take up to ~90s. Without an
+  // optimistic state the modal sat on a blank "idle" canvas the whole time,
+  // looking broken. `starting` + `startSeconds` drive a spinner + live timer
+  // from the instant Start is clicked until the session id comes back.
+  const [starting, setStarting] = useState(false)
+  const [startSeconds, setStartSeconds] = useState(0)
   // Optional WhatsApp recipient for the auto-wired completion notification.
   // When set AND the recording includes a "Capture timeline" marker, the
   // compiler appends the canonical normalize + notification steps so the
@@ -175,6 +181,7 @@ export default function RecorderDialog({
 
   const handleStart = useCallback(async () => {
     setBootError(null)
+    setStarting(true)
     try {
       const resp = await api.startRecorderSession({
         initial_url: urlInput.trim() || undefined,
@@ -182,8 +189,19 @@ export default function RecorderDialog({
       setSessionId(resp.session_id)
     } catch (err: any) {
       setBootError(err?.message || 'Failed to start session')
+    } finally {
+      setStarting(false)
     }
   }, [urlInput])
+
+  // Live elapsed counter while the inner Chromium spins up (BUG-781).
+  useEffect(() => {
+    if (!starting) { setStartSeconds(0); return }
+    const t0 = Date.now()
+    setStartSeconds(0)
+    const id = setInterval(() => setStartSeconds(Math.floor((Date.now() - t0) / 1000)), 1000)
+    return () => clearInterval(id)
+  }, [starting])
 
   const handlePointer = useCallback((evt: PointerInput) => {
     send({
@@ -364,11 +382,11 @@ export default function RecorderDialog({
               <button
                 type="button"
                 onClick={handleStart}
-                disabled={!urlInput.trim() || isClosing}
+                disabled={!urlInput.trim() || isClosing || starting}
                 title={urlInput.trim() ? 'Spawn a live Chromium and begin capturing actions' : 'Enter a starting URL above to enable recording'}
                 className="px-3 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-slate-900 text-xs font-semibold transition-colors"
               >
-                Start recording
+                {starting ? `Starting… ${startSeconds}s` : 'Start recording'}
               </button>
             ) : (
               <button
@@ -391,10 +409,10 @@ export default function RecorderDialog({
                 <button
                   type="button"
                   onClick={handleStart}
-                  disabled={!urlInput.trim() || isClosing}
+                  disabled={!urlInput.trim() || isClosing || starting}
                   className="px-3 py-2 rounded-lg bg-cyan-500 hover:bg-cyan-400 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-slate-900 text-xs font-semibold transition-colors"
                 >
-                  Start recording
+                  {starting ? `Starting… ${startSeconds}s` : 'Start recording'}
                 </button>
               )}
               {statusBadge}
@@ -459,6 +477,14 @@ export default function RecorderDialog({
                 onRectMark={handleRectMark}
                 markerMode={markerMode}
               />
+            ) : starting ? (
+              <div className="text-center text-xs text-slate-400 flex flex-col items-center gap-3">
+                <span className="inline-block w-7 h-7 rounded-full border-2 border-slate-600 border-t-cyan-400 animate-spin" />
+                <div>
+                  <p className="text-slate-200 font-medium mb-1">Starting session… {startSeconds}s</p>
+                  <p>Spawning a live Chromium and loading the page — this can take up to ~90s on a cold start.</p>
+                </div>
+              </div>
             ) : (
               <div className="text-center text-xs text-slate-500">
                 <p className="mb-1">Enter a URL above and click <span className="text-slate-300">Start recording</span>.</p>

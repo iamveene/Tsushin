@@ -780,10 +780,39 @@ def compile_events_into_nodes(events: Iterable[RecordedEvent]) -> list[dict[str,
         })
 
     nodes = _combine_captcha_chain(nodes)
+    _wire_timeline_success_selector(nodes)
     # Re-number positions after the combine
     for new_pos, n in enumerate(nodes, start=1):
         n["_recorder_position"] = new_pos
     return nodes
+
+
+def _wire_timeline_success_selector(nodes: list[dict[str, Any]]) -> None:
+    """Give the captcha solver a success_selector when a timeline follows it.
+
+    Without one, `solve_captcha` OCRs + submits correctly but can't *confirm*
+    the results loaded, so it reports a false-negative "CAPTCHA was not solved"
+    and the run ends `completed_with_errors` even though everything worked. The
+    timeline root (`#tabs-rastreamento`, the same selector the wait_for/parser
+    target) only renders AFTER a successful search — verified: on a failed
+    captcha the wait_for for it times out — so it's a sound success barrier.
+    """
+    timeline_root: Optional[str] = None
+    for n in nodes:
+        cfg = n.get("config_json") or {}
+        if cfg.get("tool_action") == "execute_script" and cfg.get("output_alias") == "extract_tracking":
+            sels = cfg.get("selectors")
+            if isinstance(sels, dict):
+                timeline_root = sels.get("extraction_root")
+            break
+    if not timeline_root:
+        return
+    for n in nodes:
+        cfg = n.get("config_json") or {}
+        if cfg.get("tool_action") == "solve_captcha":
+            args = cfg.setdefault("tool_arguments", {})
+            args.setdefault("success_selector", timeline_root)
+            break
 
 
 def _combine_captcha_chain(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
