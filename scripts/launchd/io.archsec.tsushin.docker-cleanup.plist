@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Tsushin Docker disk maintenance — macOS dev host (launchd LaunchAgent).
+
+  Source of truth: this template is version-controlled at
+    scripts/launchd/io.archsec.tsushin.docker-cleanup.plist
+  It is the macOS counterpart of the Linux prod cron (scripts/cron/).
+
+  Runs as a LaunchAgent (the logged-in user) so it can reach Docker Desktop,
+  which is per-user — a root LaunchDaemon would not see the user's daemon.
+  launchd (unlike cron) runs a missed job after wake, which fits a laptop.
+
+  This is a TEMPLATE: __TSN_SCRIPT__ and __TSN_LOG__ are absolute paths
+  (launchd does NOT expand ~ or $HOME). Install with:
+
+    mkdir -p ~/.local/bin ~/Library/Logs ~/Library/LaunchAgents
+    install -m 755 /path/to/repo/scripts/docker-disk-cleanup.sh \
+      ~/.local/bin/tsushin-docker-cleanup
+    sed -e "s|__TSN_SCRIPT__|$HOME/.local/bin/tsushin-docker-cleanup|g" \
+        -e "s|__TSN_LOG__|$HOME/Library/Logs/tsushin-docker-cleanup.log|g" \
+      /path/to/repo/scripts/launchd/io.archsec.tsushin.docker-cleanup.plist \
+      > ~/Library/LaunchAgents/io.archsec.tsushin.docker-cleanup.plist
+    launchctl bootstrap gui/$(id -u) \
+      ~/Library/LaunchAgents/io.archsec.tsushin.docker-cleanup.plist
+    # fire once to verify: launchctl kickstart -k gui/$(id -u)/io.archsec.tsushin.docker-cleanup
+
+  TSN_IMAGE_PRUNE_ALL=0 keeps tagged images for other projects (dev box);
+  only dangling layers + the over-cap build cache are removed. The prod cron
+  leaves this unset (defaults to 1 = prune all unused images).
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>io.archsec.tsushin.docker-cleanup</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__TSN_SCRIPT__</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>TSN_IMAGE_PRUNE_ALL</key>
+        <string>0</string>
+        <key>TSN_BUILD_CACHE_MAX</key>
+        <string>10GB</string>
+    </dict>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>4</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>StandardOutPath</key>
+    <string>__TSN_LOG__</string>
+    <key>StandardErrorPath</key>
+    <string>__TSN_LOG__</string>
+</dict>
+</plist>
