@@ -91,6 +91,10 @@ def _events_correios_shaped():
     return [
         RecordedEvent("navigate", {"url": "https://www.linkcorreios.com.br/"}),
         RecordedEvent("load", {"url": "https://www.linkcorreios.com.br/"}),
+        # BUG-785: each `fill` carries the focused field's FULL value at that
+        # moment (cdp_relay reads document.activeElement.value), so consecutive
+        # same-selector fills are cumulative snapshots; the compiler keeps the
+        # last (never concatenates).
         RecordedEvent("fill", {
             "selector": 'input[name="objetos"]',
             "value": "AD",
@@ -98,7 +102,7 @@ def _events_correios_shaped():
         }),
         RecordedEvent("fill", {
             "selector": 'input[name="objetos"]',
-            "value": "468811215BR",
+            "value": "AD468811215BR",
             "field_meta": {"tag": "input", "name": "objetos", "type": "text"},
         }),
         RecordedEvent("marker.captcha", {
@@ -1012,3 +1016,40 @@ def test_no_timeline_no_forced_success_selector():
             args = cfg.get("tool_arguments") or {}
             # success_selector only set by the legacy content-region path, never #tabs-rastreamento here
             assert args.get("success_selector") != "#tabs-rastreamento"
+
+
+def test_bug785_fills_keep_last_full_value_never_concatenate():
+    """BUG-785: each fill carries the field's full value (cdp_relay reads
+    document.activeElement.value), so consecutive same-selector fills keep the
+    LAST and are never concatenated. Concatenation silently amplified the value
+    under synthetic typing (e.g. a duplicated keystroke → doubled code) while
+    the StepLedger showed the clean value."""
+    events = [
+        RecordedEvent("navigate", {"url": "https://x.test/"}),
+        # Two cumulative full-value snapshots of the same field, then a
+        # duplicate snapshot (what a re-dispatched keystroke would record).
+        RecordedEvent("fill", {"selector": "input#objeto", "value": "AD", "field_meta": {"tag": "input", "id": "objeto"}}),
+        RecordedEvent("fill", {"selector": "input#objeto", "value": "AD468811215BR", "field_meta": {"tag": "input", "id": "objeto"}}),
+        RecordedEvent("fill", {"selector": "input#objeto", "value": "AD468811215BR", "field_meta": {"tag": "input", "id": "objeto"}}),
+    ]
+    config = compile_events(events)
+    fills = [s for s in config["selectors"] if s["action"] == "fill"]
+    assert len(fills) == 1
+    assert fills[0]["value"] == "AD468811215BR"  # not "ADAD468811215BR..." amplified
+
+
+def test_bug786_timeline_parser_root_is_portal_generic():
+    """BUG-786: the timeline parser finds the results region generically (date-
+    bearing rows across common containers), not tied to Correios' hardcoded
+    #tabs-rastreamento / .ship-steps as the only path."""
+    children = compile_events_into_nodes(_events_timeline_shaped())
+    es = next(c for c in children if (c["config_json"] or {}).get("tool_action") == "execute_script")
+    script = es["config_json"]["tool_arguments"]["script"]
+    # generic finder is present
+    assert "ROOT_HINTS" in script
+    assert "rowsIn" in script
+    assert "DATE_RE" in script
+    assert 'class*="result"' in script  # a generic container hint, not just Correios
+    # Correios remains supported as one hint among many (back-compat)
+    assert "#tabs-rastreamento" in script
+    assert ".ship-steps li.step" in script
