@@ -1006,3 +1006,24 @@ def test_no_timeline_means_no_trailing_nodes():
         _events_correios_shaped(), recording_id="rec1", notify_recipient="@Vini"
     )
     assert (group.get("trailing_nodes") or []) == []
+
+
+def test_timeline_wires_solve_captcha_success_selector():
+    """solve_captcha gets a success_selector = timeline root so it confirms
+    the post-submit results loaded (no false-negative 'not solved')."""
+    children = compile_events_into_nodes(_events_timeline_shaped())
+    captcha = [c for c in children if (c["config_json"] or {}).get("tool_action") == "solve_captcha"]
+    assert captcha, "expected a solve_captcha node"
+    args = (captcha[0]["config_json"].get("tool_arguments") or {})
+    assert args.get("success_selector") == "#tabs-rastreamento"
+
+
+def test_no_timeline_no_forced_success_selector():
+    """Plain (non-timeline) recordings must not gain a fabricated success_selector."""
+    children = compile_events_into_nodes(_events_correios_shaped())
+    for c in children:
+        cfg = c["config_json"] or {}
+        if cfg.get("tool_action") == "solve_captcha":
+            args = cfg.get("tool_arguments") or {}
+            # success_selector only set by the legacy content-region path, never #tabs-rastreamento here
+            assert args.get("success_selector") != "#tabs-rastreamento"

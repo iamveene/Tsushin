@@ -116,3 +116,37 @@ async def test_reap_expired_pops_under_lock():
     assert count == 1
     assert "old" not in reg._sessions
     assert "fresh" in reg._sessions
+
+
+@pytest.mark.asyncio
+async def test_orphaned_session_is_reaped_for_tenant():
+    """BUG-782: a session with no WS relay, idle past the grace, is reaped so a
+    fresh Start isn't blocked by an abandoned tab; an actively-relayed session
+    and a recently-idle one survive."""
+    import time as _time
+    reg = SessionRegistry()
+
+    orphan = _fake_session("t1", "orphan")
+    orphan.relay_send = None
+    orphan.last_active_at = _time.time() - (reg.ORPHAN_GRACE_SECONDS + 30)
+
+    active = _fake_session("t1", "active")
+    active.relay_send = lambda payload: None  # WS attached → never orphaned
+    active.last_active_at = _time.time() - (reg.ORPHAN_GRACE_SECONDS + 30)
+
+    fresh = _fake_session("t1", "fresh")
+    fresh.relay_send = None
+    fresh.last_active_at = _time.time()  # idle but within grace
+
+    other = _fake_session("t2", "other")
+    other.relay_send = None
+    other.last_active_at = _time.time() - (reg.ORPHAN_GRACE_SECONDS + 30)
+
+    for s in (orphan, active, fresh, other):
+        reg._sessions[s.session_id] = s
+
+    popped = reg._reap_for_tenant_locked("t1")
+    popped_ids = {s.session_id for s in popped}
+    assert popped_ids == {"orphan"}
+    assert "active" in reg._sessions and "fresh" in reg._sessions
+    assert "other" in reg._sessions  # different tenant untouched
