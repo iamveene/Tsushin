@@ -1111,22 +1111,20 @@ def _action_screenshots(events: list[RecordedEvent]) -> list[Optional[str]]:
     return out
 
 
-def _notify_slug(recipient: str) -> str:
-    base = _slugify((recipient or "").lstrip("@"), default="recipient")
-    return f"notify_{base}"[:48]
+def _build_tracking_trailing_nodes() -> list[dict[str, Any]]:
+    """Trailing data_transform for a timeline-capture recording.
 
+    Rides AFTER the browser group so the structured tracking object the
+    `execute_script` node returns is surfaced as a reusable flow variable —
+    `{{normalize_tracking.data_preview.*}}` (latest_status, latest_at,
+    latest_location, event_count, latest_event_key, tracking_code, …).
 
-def _build_tracking_trailing_nodes(
-    tracking_code: str,
-    notify_recipient: Optional[str],
-) -> list[dict[str, Any]]:
-    """Trailing data_transform + notification for a timeline-capture flow.
-
-    These ride AFTER the browser group so the recorder, driven entirely from
-    the UI, produces the full canonical pipeline: the execute_script node
-    returns the structured tracking object; `normalize_tracking` surfaces it
-    as `data_preview.*`; the notification templates the canonical message.
-    No footer — the message ends at the Dedupe line.
+    The recorder deliberately does NOT emit a notification. Sending is a
+    separate, first-class **Notification** flow step the user adds after the
+    recording, referencing this variable (e.g.
+    `Status: {{normalize_tracking.data_preview.latest_status}}`). Keeping the
+    recorder to "produce + expose the data" and the flow step to "send it"
+    avoids duplicating the notification surface inside the recorder.
     """
     normalize = {
         "name": "normalize_tracking",
@@ -1139,41 +1137,13 @@ def _build_tracking_trailing_nodes(
         },
         "timeout_seconds": 15,
     }
-    nodes: list[dict[str, Any]] = [normalize]
-
-    recipient = (notify_recipient or "").strip()
-    if recipient:
-        code = tracking_code or ""
-        message_template = (
-            f"Correios {code} update\n"
-            "Status: {{normalize_tracking.data_preview.latest_status}}\n"
-            "When: {{normalize_tracking.data_preview.latest_at}}\n"
-            "Location: {{normalize_tracking.data_preview.latest_location}}\n"
-            "Events: {{normalize_tracking.data_preview.event_count}}\n"
-            "Dedupe: {{normalize_tracking.data_preview.latest_event_key}}"
-        )
-        nodes.append({
-            "name": _notify_slug(recipient),
-            "type": "notification",
-            "config_json": {
-                "channel": "whatsapp",
-                "recipient": recipient,
-                "recipients": [recipient],
-                "message_template": message_template,
-            },
-            "timeout_seconds": 30,
-            # Per user-guide §9 the trailing notification observes the flow's
-            # result; it must never propagate its own delivery failure.
-            "on_failure": "continue",
-        })
-    return nodes
+    return [normalize]
 
 
 def compile_events_into_group(
     events: Iterable[RecordedEvent],
     *,
     recording_id: str,
-    notify_recipient: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Return a `browser_group` parent + annotated child nodes.
 
@@ -1242,10 +1212,12 @@ def compile_events_into_group(
         "_recorder_position": 0,
     }
 
-    # When the recording captured a structured "event timeline", auto-wire the
-    # trailing data_transform + notification so the UI-only recording yields
-    # the full canonical pipeline. These live OUTSIDE the browser group (they
-    # aren't browser steps) and the caller inserts them after the children.
+    # When the recording captured a structured "event timeline", auto-wire a
+    # trailing `normalize_tracking` data_transform so the parsed object is
+    # exposed as a reusable flow variable (`normalize_tracking.data_preview.*`).
+    # It lives OUTSIDE the browser group (it isn't a browser step) and the
+    # caller inserts it after the children. Sending is NOT wired here — the
+    # user adds a first-class Notification step that references the variable.
     has_timeline = any(
         (c.get("config_json") or {}).get("output_alias") == "extract_tracking"
         and (c.get("config_json") or {}).get("tool_action") == "execute_script"
@@ -1253,10 +1225,7 @@ def compile_events_into_group(
     )
     trailing_nodes: list[dict[str, Any]] = []
     if has_timeline:
-        tracking_code = _tracking_code_from_rows(
-            (compile_events(event_list).get("selectors") or [])
-        )
-        trailing_nodes = _build_tracking_trailing_nodes(tracking_code, notify_recipient)
+        trailing_nodes = _build_tracking_trailing_nodes()
 
     return {
         "group_node": group_node,

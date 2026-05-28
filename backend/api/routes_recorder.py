@@ -113,11 +113,13 @@ class CompileResponse(BaseModel):
 
 
 class CompileRequest(BaseModel):
-    # Optional WhatsApp recipient (e.g. "@Vini"). When set AND the recording
-    # captured a structured "event timeline", the compiler appends a trailing
-    # data_transform + notification so the UI-only recording yields the full
-    # canonical pipeline with no manual config.
-    notify_recipient: Optional[str] = Field(default=None, max_length=200)
+    # Reserved for future compile options. The recorder no longer wires a
+    # notification: a structured "event timeline" capture is exposed as the
+    # reusable `normalize_tracking.data_preview.*` flow variable, and the user
+    # adds a first-class Notification flow step that references it. This keeps
+    # the recorder to "produce the data" and avoids duplicating the
+    # notification surface inside the browser-recording dialog.
+    pass
 
 
 class StartAgentRequest(BaseModel):
@@ -203,7 +205,6 @@ async def compile_session(
     flow_group = compile_events_into_group(
         session.events,
         recording_id=session.recording_id,
-        notify_recipient=(body.notify_recipient if body else None),
     )
 
     return CompileResponse(
