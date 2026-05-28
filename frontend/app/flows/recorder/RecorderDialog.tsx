@@ -76,6 +76,12 @@ export default function RecorderDialog({
   const [events, setEvents] = useState<RecorderEventRow[]>([])
   const [savePending, setSavePending] = useState(false)
   const [markerMode, setMarkerMode] = useState<MarkerMode>(null)
+  // Optional WhatsApp recipient for the auto-wired completion notification.
+  // When set AND the recording includes a "Capture timeline" marker, the
+  // compiler appends the canonical normalize + notification steps so the
+  // UI-only recording delivers the structured tracking message with no
+  // manual config.
+  const [notifyRecipient, setNotifyRecipient] = useState('')
   // Vault picker state — opened from a StepLedger "🔑 Vault?" chip.
   // Holds the selector of the row we're wiring so the marker.vault event
   // dispatched on accept targets the correct fill row.
@@ -207,10 +213,24 @@ export default function RecorderDialog({
   }, [send])
 
   const handleRectMark = useCallback((rect: {
-    x: number; y: number; width: number; height: number; kind: 'captcha' | 'extract'
+    x: number; y: number; width: number; height: number; kind: 'captcha' | 'extract' | 'timeline'
   }) => {
     if (rect.kind === 'captcha') {
       send({ type: 'marker.captcha', x: rect.x, y: rect.y, width: rect.width, height: rect.height })
+      setMarkerMode(null)
+      return
+    }
+    if (rect.kind === 'timeline') {
+      // Structured timeline capture — no naming needed. The compiler emits a
+      // fixed `extract_tracking` execute_script parser + a normalize
+      // data_transform + (if a recipient is set) the canonical notification.
+      // One drag over the event history and the whole pipeline is wired.
+      send({
+        type: 'marker.extract',
+        x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+        as: 'tracking',
+        capture_kind: 'timeline',
+      })
       setMarkerMode(null)
       return
     }
@@ -250,7 +270,11 @@ export default function RecorderDialog({
     if (!sessionId) return
     setSavePending(true)
     try {
-      const resp = await api.compileRecorderSession(sessionId)
+      const trimmedRecipient = notifyRecipient.trim()
+      const resp = await api.compileRecorderSession(
+        sessionId,
+        trimmedRecipient ? { notify_recipient: trimmedRecipient } : undefined,
+      )
       // When the parent has opted into group insertion AND the recorder
       // produced any compilable actions, insert the parent + children at
       // the flow level. Falls back to the legacy single-step merge if
@@ -277,7 +301,7 @@ export default function RecorderDialog({
     } finally {
       setSavePending(false)
     }
-  }, [onApply, onClose, onInsertGroup, sessionId])
+  }, [notifyRecipient, onApply, onClose, onInsertGroup, sessionId])
 
   const handleClear = useCallback(() => setEvents([]), [])
 
@@ -406,6 +430,19 @@ export default function RecorderDialog({
                 onPaused={setAgentPaused}
               />
             )}
+            <div className="flex items-center gap-2 text-xs">
+              <label className="text-slate-400 shrink-0 uppercase font-medium text-[11px]">Notify on finish</label>
+              <input
+                type="text"
+                value={notifyRecipient}
+                onChange={(e) => setNotifyRecipient(e.target.value)}
+                placeholder="@Vini (optional)"
+                className="w-48 px-2.5 py-1.5 bg-slate-800 border border-slate-600 rounded-md text-white text-xs focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 outline-none"
+              />
+              <span className="text-[10px] text-slate-500 italic">
+                Pairs with 📋 Capture timeline → sends the structured tracking update on completion.
+              </span>
+            </div>
           </>
         )}
 

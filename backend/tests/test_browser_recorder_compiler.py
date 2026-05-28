@@ -907,3 +907,102 @@ def test_bug776_auto_inserts_wait_for_between_captcha_and_extract():
     wait_node = children[wait_pos]
     wait_sel = (wait_node["config_json"]["selectors"][0] or {}).get("selector")
     assert wait_sel == "#tabs-rastreamento .ship-steps"
+
+
+# ---------------------------------------------------------------------------
+# Structured "event timeline" capture (BUG-779/780)
+# ---------------------------------------------------------------------------
+
+
+def _events_timeline_shaped():
+    """Correios recording where the result region is marked as a timeline."""
+    return [
+        RecordedEvent("navigate", {"url": "https://rastreamento.correios.com.br/app/index.php"}),
+        RecordedEvent("load", {"url": "https://rastreamento.correios.com.br/app/index.php"}),
+        RecordedEvent("fill", {
+            "selector": "input#objeto", "value": "AD468811215BR",
+            "field_meta": {"tag": "input", "id": "objeto", "name": "objeto"},
+        }),
+        RecordedEvent("marker.captcha", {
+            "selector": "img#captcha_image", "meta": {"tag": "img", "id": "captcha_image"},
+        }),
+        RecordedEvent("fill", {
+            "selector": "input#captcha", "value": "XXXXXX",
+            "field_meta": {"tag": "input", "id": "captcha", "name": "captcha"},
+        }),
+        RecordedEvent("click", {
+            "selector": "button#b-pesquisar", "meta": {"tag": "button", "id": "b-pesquisar"},
+        }),
+        RecordedEvent("marker.extract", {
+            "selector": "#tabs-rastreamento", "as": "tracking", "capture_kind": "timeline",
+        }),
+    ]
+
+
+def test_timeline_capture_emits_execute_script_with_parser():
+    children = compile_events_into_nodes(_events_timeline_shaped())
+    es = [c for c in children if (c["config_json"] or {}).get("tool_action") == "execute_script"]
+    assert len(es) == 1, "timeline capture should compile to exactly one execute_script node"
+    cfg = es[0]["config_json"]
+    assert cfg.get("output_alias") == "extract_tracking"
+    script = (cfg.get("tool_arguments") or {}).get("script") or ""
+    # The recorded tracking code is injected (never hardcoded elsewhere).
+    assert "AD468811215BR" in script
+    # Deterministic FNV-1a dedupe + 28-char status slug = the canonical key shape.
+    assert "16777619" in script and "slice(0, 28)" in script
+    # No plain `extract` (innerText) node for the timeline region.
+    assert not any(
+        (c["config_json"] or {}).get("tool_action") == "extract" for c in children
+    )
+
+
+def test_timeline_wait_for_is_non_empty():
+    children = compile_events_into_nodes(_events_timeline_shaped())
+    waits = [c for c in children if (c["config_json"] or {}).get("tool_action") == "wait_for"]
+    assert waits, "a wait_for should gate the timeline parse against the post-submit reload"
+    for w in waits:
+        sel = (w["config_json"]["selectors"][0] or {}).get("selector") or ""
+        assert sel.strip(), "wait_for selector must never be empty (BUG-780)"
+    # Order: captcha → wait_for → execute_script
+    actions = [(c["config_json"] or {}).get("tool_action") for c in children]
+    assert actions.index("solve_captcha") < actions.index("wait_for") < actions.index("execute_script")
+
+
+def test_timeline_group_wires_normalize_and_notification():
+    group = compile_events_into_group(
+        _events_timeline_shaped(), recording_id="rec1", notify_recipient="@Vini"
+    )
+    trailing = group.get("trailing_nodes") or []
+    types = [t["type"] for t in trailing]
+    assert types == ["data_transform", "notification"], types
+    normalize = trailing[0]["config_json"]
+    assert normalize["source_step"] == "extract_tracking"
+    assert normalize["source_path"] == "metadata.result"
+    assert normalize["output_alias"] == "normalize_tracking"
+    notify = trailing[1]
+    assert notify["name"] == "notify_vini"
+    assert notify["config_json"]["recipient"] == "@Vini"
+    assert notify.get("on_failure") == "continue"
+    tmpl = notify["config_json"]["message_template"]
+    assert tmpl.startswith("Correios AD468811215BR update")
+    assert "Status: {{normalize_tracking.data_preview.latest_status}}" in tmpl
+    assert "Dedupe: {{normalize_tracking.data_preview.latest_event_key}}" in tmpl
+    # No footer — the message ends at the Dedupe line.
+    assert tmpl.rstrip().endswith("{{normalize_tracking.data_preview.latest_event_key}}")
+    assert "sent via" not in tmpl and "BUGS" not in tmpl
+
+
+def test_timeline_group_without_recipient_emits_normalize_only():
+    group = compile_events_into_group(
+        _events_timeline_shaped(), recording_id="rec1", notify_recipient=None
+    )
+    trailing = group.get("trailing_nodes") or []
+    assert [t["type"] for t in trailing] == ["data_transform"]
+
+
+def test_no_timeline_means_no_trailing_nodes():
+    # Plain extract (no capture_kind) must NOT auto-wire normalize/notification.
+    group = compile_events_into_group(
+        _events_correios_shaped(), recording_id="rec1", notify_recipient="@Vini"
+    )
+    assert (group.get("trailing_nodes") or []) == []
