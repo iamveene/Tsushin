@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Recorder BUG-785 (silent ledger / typing amplification) + BUG-786 (generic timeline root) (2026-05-28)
+
+- **BUG-785 — recorded fill value is now the field's real value, ledger == compiled.** A `fill` event recorded the per-keystroke `Input.insertText` fragment and the compiler/ledger *concatenated* fragments. Under synthetic/automated typing (Playwright/`computer.type`) duplicate keystrokes slipped in, so the value silently amplified (e.g. `AD468811215BR` → 37 chars) — yet the StepLedger showed the clean value, so a recording that *looked* correct compiled to a broken flow. Now `cdp_relay` records `document.activeElement.value` (the field's full value), and both `_coalesce_fills` (backend) and `coalesceForDisplay` (StepLedger) switched concatenate → **keep-last**, so the ledger always shows exactly what compiles. Verified with char-by-char `keyboard.type`: clean `tracking_code = "AD468811215BR"`, ledger matches, canonical message delivered. Files: `backend/browser_recorder/cdp_relay.py`, `event_compiler.py`, `frontend/app/flows/recorder/StepLedger.tsx`.
+- **BUG-786 — generic timeline results-root.** The "Capture timeline" parser was tied to Correios' `#tabs-rastreamento` / `.ship-steps`. It now finds the results region generically: most-specific-selector-first (first that yields date-bearing rows wins, dropping wrapper rows that contain other rows), across candidate roots (marked region → `#tabs-rastreamento` → `[class*=result/track/timeline]` → document). Correios still resolves its exact 11 events; the parser now generalizes to other postal portals. File: `backend/browser_recorder/event_compiler.py`.
+- Tests: 2 new compiler unit tests (49 pass total).
+
 ### Added — Daily Docker disk-maintenance automation, prod + dev (build-cache cap) (2026-05-28)
 
 A production deploy on 2026-05-28 failed because the host disk was 100% full: the Docker **build cache had grown unbounded to ~262 GB**. Root cause — the only cleanup cron on the host was `/etc/cron.d/docker-image-prune` (`docker image prune -af --filter "until=24h"`), and `docker image prune` **never touches the BuildKit build cache**. Frequent `--no-cache` rebuilds (the deploy path) accumulated cache with nothing reclaiming it.

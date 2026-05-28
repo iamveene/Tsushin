@@ -47,7 +47,7 @@ _BASE_TIMEOUT = 30
 # slug (e.g. "22-05-2026-15-46:objeto-entregue-ao-destinata:yl79uz").
 _TIMELINE_PARSER_JS = r"""() => {
   const tracking_code = __TRACKING_CODE_JSON__;
-  const root = document.querySelector(__ROOT_SELECTOR_JSON__) || document.querySelector('#tabs-rastreamento') || document.body;
+  const markedRoot = __ROOT_SELECTOR_JSON__;
   const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
   const slug = (value) => clean(value)
     .toLowerCase()
@@ -73,7 +73,42 @@ _TIMELINE_PARSER_JS = r"""() => {
     const location = fragments.find((value) => value !== status && value !== at && /(Unidade|Agência|Agencia|Centro|CTE|CDD|CEE|Objeto|BRASIL|[A-Z]{2}$)/.test(value)) || '';
     return { index, status, at, location, text };
   };
-  const nodes = Array.from(root?.querySelectorAll('.ship-steps li.step, .ship-steps li, li.step') || []);
+  // BUG-786: generic results-root. A real timeline row carries a date, which
+  // rejects nav/menu/carousel rows. We try selectors MOST-SPECIFIC FIRST and
+  // use the first that yields rows (so the precise Correios ".ship-steps
+  // li.step" wins its real count and broad selectors don't over-count nested
+  // wrappers), and we drop ancestor rows that merely contain other rows.
+  // Across containers we likewise take the first that yields a timeline:
+  // marked region → Correios container → common result/timeline containers →
+  // document. Not tied to Correios.
+  const DATE_RE = /\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}/;
+  const STEP_SELECTORS = ['.ship-steps li.step', '.ship-steps li', 'li.step',
+    '[class*="step" i]', '[class*="evento" i]', '[class*="event" i]',
+    '[class*="timeline" i] li', 'ol > li', 'ul > li', 'tbody > tr'];
+  // Keep only leaf rows — drop any match that contains another matched row, so
+  // a wrapper isn't counted alongside the events it holds.
+  const leavesOnly = (rows) => rows.filter((n) => !rows.some((o) => o !== n && n.contains(o)));
+  const rowsIn = (el) => {
+    if (!el) return [];
+    for (const sel of STEP_SELECTORS) {
+      let found;
+      try { found = Array.from(el.querySelectorAll(sel)); } catch (e) { continue; }
+      const rows = leavesOnly(found.filter((n) => DATE_RE.test(n.textContent || '')));
+      if (rows.length) return rows;
+    }
+    return [];
+  };
+  const ROOT_HINTS = [markedRoot, '#tabs-rastreamento', '[class*="result" i]',
+    '[class*="rastreamento" i]', '[class*="track" i]', '[class*="timeline" i]', 'main'];
+  let nodes = [];
+  for (const sel of ROOT_HINTS) {
+    if (!sel) continue;
+    let el;
+    try { el = document.querySelector(sel); } catch (e) { continue; }
+    const rows = rowsIn(el);
+    if (rows.length) { nodes = rows; break; }
+  }
+  if (!nodes.length) nodes = rowsIn(document.body);
   const events = nodes.map(parseEvent).filter((event) => event.status || event.text);
   const latest = events[0] || {};
   const latest_status = latest.status || latest.text || '';
@@ -170,12 +205,17 @@ def _coalesce_fills(events: list[RecordedEvent]) -> list[RecordedEvent]:
             and out[-1].kind == "fill"
             and out[-1].payload.get("selector") == ev.payload.get("selector")
         ):
-            # Concatenate or replace — `Input.insertText` semantics are
-            # *insert at cursor*, but since we don't track cursor position
-            # we treat sequential typing on the same field as appending.
-            prior = out[-1].payload.get("value") or ""
-            new = ev.payload.get("value") or ""
-            out[-1].payload["value"] = prior + new
+            # BUG-785: fills now carry the focused field's FULL value
+            # (cdp_relay reads document.activeElement.value after each insert),
+            # so the LATEST fill on a field is authoritative — replace, never
+            # concatenate. Concatenating per-keystroke fragments silently
+            # amplified the value under synthetic/automated typing (e.g.
+            # "AD468811215BR" → 37 chars) while the StepLedger showed the clean
+            # value, so a recording that looked correct compiled to a broken
+            # flow.
+            new = ev.payload.get("value")
+            if new:
+                out[-1].payload["value"] = new
             out[-1].payload["field_meta"] = (
                 ev.payload.get("field_meta") or out[-1].payload.get("field_meta")
             )
