@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import deque
 from typing import Any
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -135,7 +136,7 @@ async def _handle_client_message(
     try:
         msg = json.loads(raw)
     except json.JSONDecodeError:
-        await _safe_send(websocket, {"type": "error", "message": "invalid json"})
+        await session.relay_send({"type": "error", "message": "invalid json"})
         return
 
     mtype = msg.get("type")
@@ -143,7 +144,7 @@ async def _handle_client_message(
     page = session.page
 
     if mtype == "ping":
-        await _safe_send(websocket, {"type": "pong"})
+        await session.relay_send({"type": "pong"})
         return
 
     if mtype == "input.mouse":
@@ -183,7 +184,7 @@ async def _handle_client_message(
                     "meta": (sel or {}).get("meta"),
                 },
             )
-            await _safe_send(websocket, _event_envelope(evt))
+            await session.relay_send(_event_envelope(evt))
         return
 
     if mtype == "input.key":
@@ -251,7 +252,7 @@ async def _handle_client_message(
             "fill",
             {"selector": selector, "value": value, "field_meta": field_meta},
         )
-        await _safe_send(websocket, _event_envelope(evt))
+        await session.relay_send(_event_envelope(evt))
         return
 
     if mtype == "navigate":
@@ -264,7 +265,7 @@ async def _handle_client_message(
                 # those resources.
                 await page.goto(url, wait_until="domcontentloaded", timeout=45000)
             except Exception as e:
-                await _safe_send(websocket, {"type": "error", "message": f"navigate failed: {e}"})
+                await session.relay_send({"type": "error", "message": f"navigate failed: {e}"})
             # framenavigated handler appends the event
         return
 
@@ -289,7 +290,7 @@ async def _handle_client_message(
             if capture_kind:
                 payload["capture_kind"] = capture_kind
         evt = session.append_event(kind, payload)
-        await _safe_send(websocket, _event_envelope(evt))
+        await session.relay_send(_event_envelope(evt))
         return
 
     if mtype == "marker.vault":
@@ -304,20 +305,81 @@ async def _handle_client_message(
         # are valid persistence shapes for browser_secret_references.
         ref = payload["reference"]
         if not (ref.startswith("pvh_") or ref.startswith("op://")):
-            await _safe_send(websocket, {"type": "error", "message": "vault reference must be a pvh_ handle or op:// URI"})
+            await session.relay_send({"type": "error", "message": "vault reference must be a pvh_ handle or op:// URI"})
             return
         evt = session.append_event("marker.vault", payload)
-        await _safe_send(websocket, _event_envelope(evt))
+        await session.relay_send(_event_envelope(evt))
         return
 
-    await _safe_send(websocket, {"type": "error", "message": f"unknown message type: {mtype}"})
+    await session.relay_send({"type": "error", "message": f"unknown message type: {mtype}"})
 
 
 async def relay(session: RecordingSession, websocket: WebSocket) -> None:
-    """Pump CDP screencast frames out and dispatch client input until disconnect."""
+    """Pump CDP screencast frames out and dispatch client input until disconnect.
+
+    Relay hardening (BUG-788): a slow or momentarily-blocked client (long-RTT
+    link, a backgrounded tab whose rAF is throttled, or heavy main-thread work
+    such as `canvas.toDataURL`) must never wedge the session. The previous relay
+    (a) gated the screencast ack behind the per-frame client send — so a slow
+    client stalled Chromium's frame production — and (b) spawned an unbounded
+    `websocket.send_json` task per frame with no single-writer discipline, so
+    frame sends and the receive loop's event echoes raced on one Starlette
+    WebSocket (concurrent `send_json` corrupts/wedges the connection). The
+    symptom was a relay that looked "connected" (WS open) but stopped streaming
+    frames AND silently stopped processing all clicks/fills.
+
+    This version:
+      * ACKs every screencast frame to Chromium IMMEDIATELY, before any client
+        send, so the screencast pipeline is never gated on client drain.
+      * Routes every client-bound message through a SINGLE writer task — the
+        only place `websocket.send_json` is called — eliminating concurrent
+        sends.
+      * Treats frames as LOSSY (keeps only the latest; drops intermediates) and
+        control/event messages as an ordered must-deliver queue.
+      * NEVER blocks the receive loop on a client send (it only enqueues), so
+        input is dispatched to the inner Chromium regardless of client speed.
+    """
 
     cdp = session.cdp
     loop = asyncio.get_running_loop()
+
+    # Outbound plumbing for the single-writer model.
+    control: deque[dict[str, Any]] = deque()  # ordered, must-deliver
+    latest_frame: dict[str, Any] = {"v": None}  # lossy: only the newest frame
+    send_wake = asyncio.Event()
+    closed = {"v": False}
+
+    def _wake() -> None:
+        if not send_wake.is_set():
+            send_wake.set()
+
+    async def _enqueue_client(payload: dict[str, Any]) -> None:
+        # Non-blocking: queue a control/event message and wake the writer. The
+        # receive loop and page-event emitters use this so they never block on
+        # a slow socket.
+        control.append(payload)
+        _wake()
+
+    async def _sender() -> None:
+        # The ONLY coroutine that calls websocket.send_json. Drains control
+        # messages first (ordered), then sends the latest frame (lossy).
+        while not closed["v"]:
+            await send_wake.wait()
+            send_wake.clear()
+            while control or latest_frame["v"] is not None:
+                if control:
+                    payload = control.popleft()
+                else:
+                    payload = latest_frame["v"]
+                    latest_frame["v"] = None
+                try:
+                    await websocket.send_json(payload)
+                except Exception as e:
+                    logger.debug("Recorder WS send failed (client gone?): %s", e)
+                    closed["v"] = True
+                    return
+
+    sender_task = asyncio.create_task(_sender())
 
     async def _on_screencast_frame(params: dict) -> None:
         # Cache the latest frame on the session so any event captured between
@@ -326,20 +388,21 @@ async def relay(session: RecordingSession, websocket: WebSocket) -> None:
         frame_data = params.get("data")
         if frame_data:
             session.latest_frame_b64 = frame_data
-        sent = await _safe_send(websocket, {
-            "type": "frame",
-            "data": frame_data,
-            "metadata": params.get("metadata"),
-        })
-        # Always ack — even if the WS is gone, so CDP keeps a clean state.
-        # Failing to ack stalls the screencast pipeline server-side.
+        # ACK FIRST — never gate Chromium's screencast on the client drain. A
+        # missing/late ack stalls the screencast pipeline server-side.
         try:
             await cdp.send("Page.screencastFrameAck", {"sessionId": params.get("sessionId")})
         except Exception:
             pass
-        if not sent:
-            # Client likely gone; the outer loop will exit on the next receive.
-            return
+        # Lossy: overwrite the latest-frame slot. If the client hasn't drained
+        # the previous frame yet, the intermediate frame is simply dropped —
+        # bounds memory and prevents a send pile-up.
+        latest_frame["v"] = {
+            "type": "frame",
+            "data": frame_data,
+            "metadata": params.get("metadata"),
+        }
+        _wake()
 
     def _screencast_callback(params: dict) -> None:
         # `cdp.on` fires synchronously from the playwright thread; schedule
@@ -351,10 +414,19 @@ async def relay(session: RecordingSession, websocket: WebSocket) -> None:
     try:
         await cdp.send("Page.startScreencast", _SCREENCAST_PARAMS)
     except Exception as e:
-        await _safe_send(websocket, {"type": "error", "message": f"screencast start failed: {e}"})
+        closed["v"] = True
+        sender_task.cancel()
+        try:
+            await sender_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        try:
+            await websocket.send_json({"type": "error", "message": f"screencast start failed: {e}"})
+        except Exception:
+            pass
         return
 
-    await _safe_send(websocket, {
+    await _enqueue_client({
         "type": "hello",
         "session_id": session.session_id,
         "viewport": {
@@ -367,9 +439,12 @@ async def relay(session: RecordingSession, websocket: WebSocket) -> None:
     # navigate from create(), reconnect-after-blip, etc.) so the
     # StepLedger doesn't show a stale-feeling zero count.
     for prior in list(session.events):
-        await _safe_send(websocket, _event_envelope(prior))
+        await _enqueue_client(_event_envelope(prior))
 
-    session.relay_send = lambda payload: _safe_send(websocket, payload)
+    # `relay_send` is the single-writer enqueue (async, non-blocking). Page-event
+    # emitters (_wire_page_events) and _handle_client_message both route through
+    # it, so nothing else ever touches websocket.send_json directly.
+    session.relay_send = _enqueue_client
 
     try:
         while True:
@@ -381,6 +456,13 @@ async def relay(session: RecordingSession, websocket: WebSocket) -> None:
             await _handle_client_message(session, websocket, raw)
     finally:
         session.relay_send = None
+        closed["v"] = True
+        _wake()
+        sender_task.cancel()
+        try:
+            await sender_task
+        except (asyncio.CancelledError, Exception):
+            pass
         try:
             await cdp.send("Page.stopScreencast")
         except Exception:
