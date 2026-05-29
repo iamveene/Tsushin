@@ -414,4 +414,5 @@ deploy-to-vm.sh
 !backend/tests/test_asr_routes_http.py
 !backend/tests/test_browser_recorder_compiler.py
 !backend/tests/test_browser_recorder_session_manager.py
+!backend/tests/test_recorder_relay_backpressure.py
 !backend/tests/test_record_store_field_fallback.py
