@@ -288,6 +288,42 @@ class GitHubRepositoryService:
             )
         return data
 
+    async def list_branches(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        max_results: int = 30,
+    ) -> list[dict[str, Any]]:
+        owner = _validate_owner(owner)
+        repo = _validate_repo(repo)
+        per_page = max(1, min(int(max_results), 100))
+        url = f"{self._site_url}/repos/{owner}/{repo}/branches"
+        data = await self._get(url, params={"per_page": per_page})
+        if not isinstance(data, list):
+            return []
+        return [b for b in data if isinstance(b, dict)]
+
+    async def list_commits(
+        self,
+        owner: str,
+        repo: str,
+        *,
+        sha: Optional[str] = None,
+        max_results: int = 20,
+    ) -> list[dict[str, Any]]:
+        owner = _validate_owner(owner)
+        repo = _validate_repo(repo)
+        per_page = max(1, min(int(max_results), 100))
+        params: dict[str, Any] = {"per_page": per_page}
+        if sha and sha.strip():
+            params["sha"] = sha.strip()
+        url = f"{self._site_url}/repos/{owner}/{repo}/commits"
+        data = await self._get(url, params=params)
+        if not isinstance(data, list):
+            return []
+        return [c for c in data if isinstance(c, dict)]
+
     # ---- write actions (capability-gated upstream by the skill caller)
 
     async def create_issue(

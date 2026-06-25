@@ -18,6 +18,7 @@ import {
   type EmailTrigger,
   type GitHubIntegration,
   type GitHubTrigger,
+  type GitHubProjectsTrigger,
   type GitLabIntegration,
   type GitLabTrigger,
   type JiraIntegration,
@@ -55,7 +56,7 @@ import {
   type IconProps,
 } from '@/components/ui/icons'
 
-export type TriggerId = 'email' | 'webhook' | 'jira' | 'github' | 'gitlab'
+export type TriggerId = 'email' | 'webhook' | 'jira' | 'github' | 'gitlab' | 'github_projects'
 
 export type SavedTriggerAny =
   | EmailTrigger
@@ -63,6 +64,7 @@ export type SavedTriggerAny =
   | GitHubTrigger
   | GitLabTrigger
   | WebhookIntegration
+  | GitHubProjectsTrigger
 
 interface Props {
   isOpen: boolean
@@ -153,6 +155,15 @@ const KIND_CATALOG: KindEntry[] = [
     iconClass: 'text-orange-300',
     iconBg: 'bg-orange-500/10',
   },
+  {
+    id: 'github_projects',
+    display_name: 'GitHub Projects',
+    description: 'Watch a GitHub Projects v2 board and notify on new / assigned / moved cards.',
+    setup_hint: 'Reuses a Hub GitHub connection (PAT needs read:project). Polls the board on an interval.',
+    Icon: GitHubIcon,
+    iconClass: 'text-fuchsia-300',
+    iconBg: 'bg-fuchsia-500/10',
+  },
 ]
 
 type WizardTone = 'default' | 'gmail' | 'whatsapp' | 'mcp'
@@ -162,6 +173,7 @@ const KIND_TONE: Record<TriggerId, WizardTone> = {
   jira: 'default',
   github: 'default',
   gitlab: 'default',
+  github_projects: 'default',
 }
 
 const KIND_ACCENT_BUTTON: Record<TriggerId, string> = {
@@ -170,6 +182,7 @@ const KIND_ACCENT_BUTTON: Record<TriggerId, string> = {
   jira: 'bg-blue-600 hover:bg-blue-500 text-white',
   github: 'bg-violet-600 hover:bg-violet-500 text-white',
   gitlab: 'bg-orange-600 hover:bg-orange-500 text-white',
+  github_projects: 'bg-fuchsia-600 hover:bg-fuchsia-500 text-white',
 }
 
 const getErrorMessage = (error: unknown, fallback: string) =>
@@ -444,6 +457,16 @@ export default function TriggerCreationWizard({
   const [repoName, setRepoName] = useState('')
   const [githubWebhookSecret, setGithubWebhookSecret] = useState('')
   const [githubEvents, setGithubEvents] = useState<string[]>(['push', 'pull_request'])
+
+  // GitHub Projects v2 board trigger (reuses the GitHub integration catalog).
+  const [ghpIntegrationName, setGhpIntegrationName] = useState('GitHub Projects board watcher')
+  const [ghpIntegrationId, setGhpIntegrationId] = useState<number | null>(null)
+  const [ghpOwner, setGhpOwner] = useState('')
+  const [ghpNumber, setGhpNumber] = useState('')
+  const [ghpPollInterval, setGhpPollInterval] = useState('300')
+  const [ghpRecipient, setGhpRecipient] = useState('@Vini')
+  const [ghpTesting, setGhpTesting] = useState(false)
+  const [ghpTestResult, setGhpTestResult] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
   const [gitlabIntegrationName, setGitlabIntegrationName] = useState('GitLab project events')
   const [gitlabIntegrations, setGitlabIntegrations] = useState<GitLabIntegration[]>([])
   const [gitlabIntegrationsLoading, setGitlabIntegrationsLoading] = useState(false)
@@ -507,6 +530,14 @@ export default function TriggerCreationWizard({
     setRepoName('')
     setGithubWebhookSecret('')
     setGithubEvents(['push', 'pull_request'])
+    setGhpIntegrationName('GitHub Projects board watcher')
+    setGhpIntegrationId(null)
+    setGhpOwner('')
+    setGhpNumber('')
+    setGhpPollInterval('300')
+    setGhpRecipient('@Vini')
+    setGhpTesting(false)
+    setGhpTestResult(null)
     setGitlabIntegrationName('GitLab project events')
     setSelectedGitlabIntegrationId(null)
     setGitlabProjectPath('')
@@ -689,6 +720,70 @@ export default function TriggerCreationWizard({
     }
   }, [githubIntegrationsFetched, isOpen, kind, step])
 
+  // GitHub Projects reuses the GitHub integration catalog; load it on its source step.
+  const [ghpIntegrationsFetched, setGhpIntegrationsFetched] = useState(false)
+  useEffect(() => {
+    if (!isOpen) {
+      setGhpIntegrationsFetched(false)
+      return
+    }
+    if (kind !== 'github_projects' || step < 2 || ghpIntegrationsFetched) return
+    let cancelled = false
+    setGithubIntegrationsLoading(true)
+    api.listGitHubIntegrations()
+      .then((list) => {
+        if (cancelled) return
+        setGithubIntegrations(list)
+        const firstActive = list.find((item) => item.is_active) || list[0]
+        if (firstActive) {
+          setGhpIntegrationId((current) => current ?? firstActive.id)
+          if (firstActive.default_owner) setGhpOwner((current) => current || firstActive.default_owner || '')
+        }
+        setGhpIntegrationsFetched(true)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setGithubIntegrations([])
+          setGhpIntegrationsFetched(true)
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setGithubIntegrationsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [ghpIntegrationsFetched, isOpen, kind, step])
+
+  const handleTestGhpConnection = async () => {
+    const projectNum = Number(ghpNumber)
+    if (!ghpIntegrationId || !ghpOwner.trim() || !Number.isInteger(projectNum) || projectNum < 1) {
+      setGhpTestResult({ tone: 'error', message: 'Pick a connection and enter a valid project owner + number first.' })
+      return
+    }
+    setGhpTesting(true)
+    setGhpTestResult(null)
+    try {
+      const res = await api.testGitHubProjectsConnection({
+        github_integration_id: ghpIntegrationId,
+        project_owner: ghpOwner.trim(),
+        project_number: projectNum,
+      })
+      if (res.ok) {
+        setGhpTestResult({
+          tone: 'success',
+          message: `Connected: "${res.title || 'board'}" (#${res.number ?? projectNum}).`,
+        })
+      } else {
+        setGhpTestResult({ tone: 'error', message: res.error || 'Could not read the board.' })
+      }
+    } catch (error: unknown) {
+      setGhpTestResult({ tone: 'error', message: getErrorMessage(error, 'Failed to test connection') })
+    } finally {
+      setGhpTesting(false)
+    }
+  }
+
   const [gitlabIntegrationsFetched, setGitlabIntegrationsFetched] = useState(false)
   useEffect(() => {
     if (!isOpen) {
@@ -814,6 +909,21 @@ export default function TriggerCreationWizard({
           gitlabEvents.length > 0,
       )
     }
+    if (kind === 'github_projects') {
+      const projectNum = Number(ghpNumber)
+      const pollNum = Number(ghpPollInterval)
+      const pollOk = Number.isFinite(pollNum) && pollNum >= 60 && pollNum <= 3600
+      return Boolean(
+        ghpIntegrationId &&
+          ghpIntegrationName.trim() &&
+          ghpOwner.trim() &&
+          Number.isInteger(projectNum) &&
+          projectNum >= 1 &&
+          defaultAgentId &&
+          ghpRecipient.trim() &&
+          pollOk,
+      )
+    }
     return false
   }, [
     emailCredentialsOk,
@@ -830,6 +940,13 @@ export default function TriggerCreationWizard({
     jiraJql,
     jiraPollIntervalValid,
     kind,
+    defaultAgentId,
+    ghpIntegrationId,
+    ghpIntegrationName,
+    ghpOwner,
+    ghpNumber,
+    ghpPollInterval,
+    ghpRecipient,
     repoName,
     repoOwner,
     selectedGithubIntegrationId,
@@ -1622,6 +1739,45 @@ export default function TriggerCreationWizard({
           onCreated?.('gitlab', result.id, flowId)
           return
         }
+
+        case 'github_projects': {
+          if (!ghpIntegrationName.trim()) {
+            throw new Error('Trigger name is required.')
+          }
+          if (!ghpIntegrationId) {
+            throw new Error('Pick a Hub GitHub integration to link this trigger to.')
+          }
+          if (!ghpOwner.trim()) {
+            throw new Error('Project owner is required.')
+          }
+          const projectNumber = Number(ghpNumber)
+          if (!Number.isInteger(projectNumber) || projectNumber < 1) {
+            throw new Error('Project number must be a positive integer.')
+          }
+          if (!defaultAgentId) {
+            throw new Error('Pick the agent that will deliver board notifications.')
+          }
+          const pollValue = Number(ghpPollInterval)
+          // Notification-only trigger: no Memory Recap (there is no conversation
+          // step to recall into), so persistRecapIfNeeded is intentionally skipped.
+          const result = await api.createGitHubProjectsTrigger({
+            integration_name: ghpIntegrationName.trim(),
+            github_integration_id: ghpIntegrationId,
+            project_owner: ghpOwner.trim(),
+            project_number: projectNumber,
+            poll_interval_seconds: Number.isFinite(pollValue) ? pollValue : 300,
+            default_agent_id: defaultAgentId,
+            notify_recipient_raw: ghpRecipient.trim() || '@Vini',
+            notification_enabled: true,
+            is_active: isActive,
+          })
+          const flowId = result.auto_flow_id ?? null
+          setSavedTrigger(result)
+          setAutoFlowId(flowId)
+          setSaveState('success')
+          onCreated?.('github_projects', result.id, flowId)
+          return
+        }
       }
     } catch (error: unknown) {
       setSaveState('idle')
@@ -1632,6 +1788,12 @@ export default function TriggerCreationWizard({
     branchFilter,
     buildPRSubmittedCriteria,
     defaultAgentId,
+    ghpIntegrationId,
+    ghpIntegrationName,
+    ghpNumber,
+    ghpOwner,
+    ghpPollInterval,
+    ghpRecipient,
     emailCriteriaSource,
     emailCriteriaText,
     emailIntegrationId,
@@ -1953,6 +2115,39 @@ export default function TriggerCreationWizard({
               onIsActiveChange={setIsActive}
             />
           )}
+
+          {kind === 'github_projects' && (
+            <GitHubProjectsSourceBody
+              integrationName={ghpIntegrationName}
+              onIntegrationNameChange={setGhpIntegrationName}
+              integrations={githubIntegrations}
+              integrationsLoading={githubIntegrationsLoading}
+              selectedIntegrationId={ghpIntegrationId}
+              onIntegrationSelect={(next) => {
+                setGhpIntegrationId(next)
+                if (next) {
+                  const match = githubIntegrations.find((item) => item.id === next)
+                  if (match?.default_owner) setGhpOwner((current) => current || match.default_owner || '')
+                }
+              }}
+              projectOwner={ghpOwner}
+              onProjectOwnerChange={setGhpOwner}
+              projectNumber={ghpNumber}
+              onProjectNumberChange={setGhpNumber}
+              pollInterval={ghpPollInterval}
+              onPollIntervalChange={setGhpPollInterval}
+              recipient={ghpRecipient}
+              onRecipientChange={setGhpRecipient}
+              agents={agents}
+              defaultAgentId={defaultAgentId}
+              onDefaultAgentChange={setDefaultAgentId}
+              isActive={isActive}
+              onIsActiveChange={setIsActive}
+              testing={ghpTesting}
+              testResult={ghpTestResult}
+              onTestConnection={handleTestGhpConnection}
+            />
+          )}
         </div>
       </Wizard>
     )
@@ -2076,6 +2271,16 @@ export default function TriggerCreationWizard({
               authorFilter={authorFilter}
               onAuthorFilterChange={setAuthorFilter}
             />
+          )}
+
+          {kind === 'github_projects' && (
+            <div className="rounded-2xl border border-fuchsia-500/20 bg-fuchsia-500/5 p-4 text-sm text-tsushin-slate">
+              <div className="font-medium text-white">No filters — notifies on every board change</div>
+              <p className="mt-1 text-xs">
+                This trigger sends a WhatsApp message for every new card, every assignment, and every column
+                move on the board. Per-event-type and per-phase filters are planned for a later version.
+              </p>
+            </div>
           )}
         </div>
       </Wizard>
@@ -2333,6 +2538,8 @@ function sourceStepTitle(kind: TriggerId): string {
       return 'Connect a GitHub repository to watch'
     case 'gitlab':
       return 'Connect a GitLab project to watch'
+    case 'github_projects':
+      return 'Connect a GitHub Projects board to watch'
   }
 }
 
@@ -2348,12 +2555,15 @@ function sourceStepDescription(kind: TriggerId): string {
       return 'Pick a Hub GitHub integration, then wire a webhook so repository events fire this trigger.'
     case 'gitlab':
       return 'Pick a Hub GitLab integration, then wire a webhook so project events fire this trigger.'
+    case 'github_projects':
+      return 'Pick a Hub GitHub connection (PAT needs read:project), then enter the board owner and number. The board is polled on an interval.'
   }
 }
 
 function displayKind(kind: TriggerId): string {
   if (kind === 'gitlab') return 'GitLab'
   if (kind === 'github') return 'GitHub'
+  if (kind === 'github_projects') return 'GitHub Projects'
   return kind.charAt(0).toUpperCase() + kind.slice(1)
 }
 
@@ -3143,6 +3353,231 @@ function JiraSourceBody({
           <div>
             <div className="text-sm font-medium text-white">{isActive ? 'Active on save' : 'Create paused'}</div>
             <p className="mt-1 text-xs text-tsushin-slate">Paused triggers stop polling Jira until resumed.</p>
+          </div>
+        </label>
+      </div>
+    </div>
+  )
+}
+
+interface GitHubProjectsSourceBodyProps {
+  integrationName: string
+  onIntegrationNameChange: (value: string) => void
+  integrations: GitHubIntegration[]
+  integrationsLoading: boolean
+  selectedIntegrationId: number | null
+  onIntegrationSelect: (id: number | null) => void
+  projectOwner: string
+  onProjectOwnerChange: (value: string) => void
+  projectNumber: string
+  onProjectNumberChange: (value: string) => void
+  pollInterval: string
+  onPollIntervalChange: (value: string) => void
+  recipient: string
+  onRecipientChange: (value: string) => void
+  agents: Agent[]
+  defaultAgentId: number | null
+  onDefaultAgentChange: (id: number | null) => void
+  isActive: boolean
+  onIsActiveChange: (value: boolean) => void
+  testing: boolean
+  testResult: { tone: 'success' | 'error'; message: string } | null
+  onTestConnection: () => void
+}
+
+function GitHubProjectsSourceBody({
+  integrationName,
+  onIntegrationNameChange,
+  integrations,
+  integrationsLoading,
+  selectedIntegrationId,
+  onIntegrationSelect,
+  projectOwner,
+  onProjectOwnerChange,
+  projectNumber,
+  onProjectNumberChange,
+  pollInterval,
+  onPollIntervalChange,
+  recipient,
+  onRecipientChange,
+  agents,
+  defaultAgentId,
+  onDefaultAgentChange,
+  isActive,
+  onIsActiveChange,
+  testing,
+  testResult,
+  onTestConnection,
+}: GitHubProjectsSourceBodyProps) {
+  const idPrefix = useId()
+  const nameId = `${idPrefix}-name`
+  const connId = `${idPrefix}-conn`
+  const ownerId = `${idPrefix}-owner`
+  const numberId = `${idPrefix}-number`
+  const pollId = `${idPrefix}-poll`
+  const recipientId = `${idPrefix}-recipient`
+  const agentId = `${idPrefix}-agent`
+  const pollNum = Number(pollInterval)
+  const pollValid = Number.isFinite(pollNum) && pollNum >= 60 && pollNum <= 3600
+
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="space-y-2">
+          <label htmlFor={nameId} className="block text-sm font-medium text-white">
+            Trigger Name <span className="text-red-400">*</span>
+          </label>
+          <input
+            id={nameId}
+            type="text"
+            value={integrationName}
+            onChange={(event) => onIntegrationNameChange(event.target.value)}
+            placeholder="GitHub Projects board watcher"
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-fuchsia-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-500/30"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor={connId} className="block text-sm font-medium text-white">
+            GitHub Connection <span className="text-red-400">*</span>
+          </label>
+          <select
+            id={connId}
+            value={selectedIntegrationId ?? ''}
+            onChange={(event) => onIntegrationSelect(event.target.value ? Number(event.target.value) : null)}
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white focus:border-fuchsia-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-500/30"
+          >
+            <option value="">
+              {integrationsLoading ? 'Loading GitHub connections…' : 'Select a GitHub connection'}
+            </option>
+            {integrations.map((integration) => (
+              <option key={integration.id} value={integration.id}>
+                {integration.integration_name || integration.name || `GitHub connection #${integration.id}`}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-tsushin-slate">
+            The PAT on this connection must include the <code className="text-fuchsia-300">read:project</code> scope.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor={ownerId} className="block text-sm font-medium text-white">
+            Project Owner <span className="text-red-400">*</span>
+          </label>
+          <input
+            id={ownerId}
+            type="text"
+            value={projectOwner}
+            onChange={(event) => onProjectOwnerChange(event.target.value)}
+            placeholder="iamveene"
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-fuchsia-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-500/30"
+          />
+          <p className="text-xs text-tsushin-slate">
+            User or org login from the board URL, e.g. <code className="text-fuchsia-300">github.com/users/iamveene/projects/1</code>.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor={numberId} className="block text-sm font-medium text-white">
+            Project Number <span className="text-red-400">*</span>
+          </label>
+          <input
+            id={numberId}
+            type="number"
+            min={1}
+            step={1}
+            value={projectNumber}
+            onChange={(event) => onProjectNumberChange(event.target.value)}
+            placeholder="1"
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-fuchsia-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-500/30"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor={pollId} className="block text-sm font-medium text-white">
+            Poll Interval (seconds) <span className="text-red-400">*</span>
+          </label>
+          <input
+            id={pollId}
+            type="number"
+            min={60}
+            max={3600}
+            step={60}
+            value={pollInterval}
+            onChange={(event) => onPollIntervalChange(event.target.value)}
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white focus:border-fuchsia-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-500/30"
+          />
+          <p className={`text-xs ${pollValid ? 'text-tsushin-slate' : 'text-amber-300'}`}>
+            Use a value between 60 and 3600 seconds (default 300).
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor={recipientId} className="block text-sm font-medium text-white">
+            Notify recipient <span className="text-red-400">*</span>
+          </label>
+          <input
+            id={recipientId}
+            type="text"
+            value={recipient}
+            onChange={(event) => onRecipientChange(event.target.value)}
+            placeholder="@Vini"
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-fuchsia-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-500/30"
+          />
+          <p className="text-xs text-tsushin-slate">
+            Contact name, <code className="text-fuchsia-300">@mention</code>, or phone number to receive board notifications.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor={agentId} className="block text-sm font-medium text-white">
+            Delivery agent <span className="text-red-400">*</span>
+          </label>
+          <select
+            id={agentId}
+            value={defaultAgentId ?? ''}
+            onChange={(event) => onDefaultAgentChange(event.target.value ? Number(event.target.value) : null)}
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white focus:border-fuchsia-500 focus:outline-none focus:ring-2 focus:ring-fuchsia-500/30"
+          >
+            <option value="">Select an agent</option>
+            {agents.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.contact_name}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-tsushin-slate">
+            Notifications are sent through this agent&apos;s WhatsApp connection (no AI is invoked per event).
+          </p>
+        </div>
+
+        <div className="space-y-2 md:col-span-2">
+          <button
+            type="button"
+            onClick={onTestConnection}
+            disabled={testing}
+            className="inline-flex items-center gap-2 rounded-lg border border-fuchsia-400/40 bg-fuchsia-500/10 px-3 py-1.5 text-xs text-fuchsia-100 hover:text-white disabled:opacity-50"
+          >
+            {testing ? 'Testing…' : 'Test connection'}
+          </button>
+          {testResult && (
+            <p className={`text-xs ${testResult.tone === 'success' ? 'text-emerald-300' : 'text-amber-300'}`}>
+              {testResult.message}
+            </p>
+          )}
+        </div>
+
+        <label className="flex items-center gap-3 rounded-2xl border border-tsushin-border/70 bg-tsushin-slate/5 p-4 md:col-span-2">
+          <input
+            type="checkbox"
+            checked={isActive}
+            onChange={(event) => onIsActiveChange(event.target.checked)}
+            className="h-4 w-4 rounded border-white/20 bg-[#0a0a0f] text-fuchsia-500 focus:ring-fuchsia-500"
+          />
+          <div>
+            <div className="text-sm font-medium text-white">{isActive ? 'Active on save' : 'Create paused'}</div>
+            <p className="mt-1 text-xs text-tsushin-slate">Paused triggers stop polling the board until resumed.</p>
           </div>
         </label>
       </div>

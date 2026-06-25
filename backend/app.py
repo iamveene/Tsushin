@@ -120,6 +120,7 @@ from api.routes_email_triggers import router as email_triggers_router
 from api.routes_jira_integrations import router as jira_integrations_router
 from api.routes_jira_triggers import router as jira_triggers_router
 from api.routes_github_triggers import router as github_triggers_router
+from api.routes_github_projects_triggers import router as github_projects_triggers_router
 from api.routes_gitlab_triggers import router as gitlab_triggers_router
 from api.routes_wizards import router as wizards_router
 from api.routes_github_inbound import router as github_inbound_router
@@ -1502,6 +1503,7 @@ app.include_router(email_triggers_router)  # Email trigger CRUD (/api/triggers/e
 app.include_router(jira_integrations_router)  # Jira Tool API integrations (/api/hub/jira-integrations/*)
 app.include_router(jira_triggers_router)  # Jira trigger CRUD (/api/triggers/jira/*)
 app.include_router(github_triggers_router)  # GitHub trigger CRUD (/api/triggers/github/*)
+app.include_router(github_projects_triggers_router)  # GitHub Projects trigger CRUD (/api/triggers/github-projects/*)
 app.include_router(gitlab_triggers_router)  # GitLab trigger CRUD (/api/triggers/gitlab/*)
 app.include_router(wizards_router)  # v0.7.0-fix Phase 5: wizard manifest API (/api/wizards/manifests)
 app.include_router(github_inbound_router)  # GitHub trigger inbound webhooks (/api/triggers/github/*/inbound)
