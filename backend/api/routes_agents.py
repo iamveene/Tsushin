@@ -1066,6 +1066,11 @@ def delete_agent(
     # FKs (agent_communication_*, agent_custom_skill, sentinel_profile_assignment) are
     # handled by Postgres automatically and are not in this block.
     #
+    # BUG-789: the agent_team_member family (agent_team_member, *_run, *_a2a_snapshot)
+    # are FK(agent_id) RESTRICT, and agent_team.coordinator_agent_id is NO ACTION — all
+    # block deletion of any team-member / coordinator agent ("cascade cleanup missed a
+    # table" 409). They are handled explicitly below.
+    #
     # Strategy:
     #   - DELETE rows in tables that are owned-by-agent (config, state, queues, sessions)
     #   - UPDATE ... SET agent_id = NULL in audit / historical tables so the record of
@@ -1075,6 +1080,12 @@ def delete_agent(
     try:
         # Owned-by-agent: delete
         _owned_tables_agent_id = [
+            # BUG-789: team-membership tables are FK(agent_id) RESTRICT → they BLOCK
+            # deletion of any agent that is/was a team member. Delete the run/snapshot
+            # children before the membership row itself.
+            "agent_team_member_run",           # FK RESTRICT — per-member run history
+            "agent_team_member_a2a_snapshot",  # FK RESTRICT — per-member A2A snapshot
+            "agent_team_member",               # FK RESTRICT — the membership row
             "agent_skill",                 # per-agent skill config (no FK — silent orphan risk)
             "agent_skill_integration",     # FK NO ACTION — blocks delete today
             "agent_knowledge",             # per-agent KB docs
@@ -1103,6 +1114,10 @@ def delete_agent(
         db.execute(text("UPDATE sentinel_analysis_log SET agent_id = NULL WHERE agent_id = :aid"), {"aid": agent_id})
         db.execute(text("UPDATE token_usage SET agent_id = NULL WHERE agent_id = :aid"), {"aid": agent_id})
         db.execute(text("UPDATE shell_command SET executed_by_agent_id = NULL WHERE executed_by_agent_id = :aid"), {"aid": agent_id})
+
+        # BUG-789: a team may name this agent as coordinator (FK NO ACTION → blocks).
+        # Null the pointer so the team survives without referencing the deleted agent.
+        db.execute(text("UPDATE agent_team SET coordinator_agent_id = NULL WHERE coordinator_agent_id = :aid"), {"aid": agent_id})
 
         # Unbind from projects and flows without destroying them (the project/flow
         # structure survives the agent's deletion; the binding is re-assigned later).
