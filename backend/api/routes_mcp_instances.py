@@ -854,14 +854,34 @@ async def update_instance_filters(
             f"keywords={len(data.group_keywords or [])}, dm_auto={data.dm_auto_mode}"
         )
 
-        # Hot-reload watcher filter if instance is running
+        # BUG-790: ENFORCE that a filter edit lands on the LIVE watcher.
+        # reload_instance_filter() hot-updates a running watcher's MessageFilter
+        # in place and returns True; if the watcher isn't live it returns False,
+        # in which case we (re)start it so the new filters take effect immediately.
+        # Previously the return value was ignored and "Hot-reloaded" was logged
+        # unconditionally, so a UI filter edit could silently no-op until the next
+        # restart with no signal — the user had no way to know a reload was needed.
+        reloaded = False
         if hasattr(request.app.state, 'watcher_manager'):
+            watcher_manager = request.app.state.watcher_manager
             try:
-                watcher_manager = request.app.state.watcher_manager
-                watcher_manager.reload_instance_filter(instance_id)
-                logger.info(f"Hot-reloaded filter for instance {instance_id}")
+                reloaded = bool(watcher_manager.reload_instance_filter(instance_id))
             except Exception as e:
-                logger.warning(f"Could not hot-reload filter for instance {instance_id}: {e}")
+                logger.warning(f"Filter hot-reload errored for instance {instance_id}: {e}")
+            if not reloaded and instance.status in ("running", "starting"):
+                try:
+                    reloaded = bool(await watcher_manager.start_watcher_for_instance(instance_id, db))
+                    logger.info(
+                        f"Filter edit: watcher was not live for instance {instance_id}; (re)started -> {reloaded}"
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not start watcher for instance {instance_id} after filter edit: {e}")
+            logger.info(f"Filter edit for instance {instance_id} applied to live watcher: reloaded={reloaded}")
+        else:
+            logger.warning(
+                f"watcher_manager not on app.state; filter edit for instance {instance_id} "
+                "will not take effect until restart"
+            )
 
         # Parse JSON fields for response
         response_data = {
