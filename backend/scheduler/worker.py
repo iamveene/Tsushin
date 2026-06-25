@@ -197,6 +197,19 @@ class SchedulerWorker:
         except Exception as e:
             logger.error(f"Failed to poll Jira triggers: {e}", exc_info=True)
 
+        try:
+            from channels.github_projects.trigger import GitHubProjectsTrigger
+            from db import session_scope
+
+            with session_scope() as ghp_db:
+                ghp_results = asyncio.run(GitHubProjectsTrigger.poll_active(ghp_db))
+            logger.info(
+                "GitHub Projects trigger poll completed with %s active trigger(s)",
+                len(ghp_results),
+            )
+        except Exception as e:
+            logger.error(f"Failed to poll GitHub Projects triggers: {e}", exc_info=True)
+
     def force_poll(self):
         """
         Force an immediate poll (for testing/manual triggers).

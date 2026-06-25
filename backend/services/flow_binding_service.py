@@ -45,6 +45,7 @@ _KIND_NAME_FIELDS: dict[str, str] = {
     "jira": "integration_name",
     "email": "integration_name",
     "github": "integration_name",
+    "github_projects": "integration_name",
     "gitlab": "integration_name",
     "webhook": "integration_name",
 }
@@ -54,6 +55,7 @@ _KIND_DEFAULT_OBJECTIVE: dict[str, str] = {
     "jira": "Process the inbound Jira event and surface the actionable insight.",
     "email": "Process the inbound email and surface the actionable insight.",
     "github": "Process the inbound GitHub event and surface the actionable insight.",
+    "github_projects": "Notify on the GitHub Projects board change.",
     "gitlab": "Process the inbound GitLab event and surface the actionable insight.",
     "webhook": "Process the inbound webhook payload and surface the actionable insight.",
 }
@@ -69,6 +71,7 @@ def _trigger_instance_name(db: Session, *, trigger_kind: str, trigger_instance_i
     from models import (
         EmailChannelInstance,
         GitHubChannelInstance,
+        GitHubProjectsChannelInstance,
         GitLabChannelInstance,
         JiraChannelInstance,
         WebhookIntegration,
@@ -78,6 +81,7 @@ def _trigger_instance_name(db: Session, *, trigger_kind: str, trigger_instance_i
         "jira": JiraChannelInstance,
         "email": EmailChannelInstance,
         "github": GitHubChannelInstance,
+        "github_projects": GitHubProjectsChannelInstance,
         "gitlab": GitLabChannelInstance,
         "webhook": WebhookIntegration,
     }.get(trigger_kind)
@@ -239,6 +243,8 @@ def ensure_system_managed_flow_for_trigger(
     default_agent_id: Optional[int] = None,
     notification_recipient: Optional[str] = None,
     notification_enabled: bool = False,
+    notification_only: bool = False,
+    notification_template: Optional[str] = None,
 ) -> tuple[FlowDefinition, FlowTriggerBinding, bool]:
     """v0.7.0 Wave 4 — Phase A auto-Flow generation.
 
@@ -252,6 +258,12 @@ def ensure_system_managed_flow_for_trigger(
          objective string. Acts as the "default agent" entry point.
       4. ``notification`` — ``enabled=False`` initially; the casual-user
          "Enable Notification" toggle flips this and sets ``recipient_phone``.
+
+    ``notification_only=True`` (used by the GitHub Projects trigger) omits the
+    conversation node entirely so the flow is a deterministic Source → Gate →
+    Notification pipeline with **no LLM per event**. ``notification_template``
+    seeds the Notification node's ``message_template`` (e.g.
+    ``"{{source.payload.message}}"`` when the trigger pre-composes the text).
 
     Returns ``(flow, binding, created)`` where ``created`` is True iff a
     new flow was just inserted (False on idempotent re-runs).
@@ -341,32 +353,39 @@ def ensure_system_managed_flow_for_trigger(
     # failure to "skipped", so the overall run still completes cleanly and
     # downstream nodes (Notification, etc.) still execute. Operators who later
     # add a recipient get the normal failure-loud behavior on real errors.
-    conversation_node = FlowNode(
-        flow_definition_id=flow.id,
-        type="conversation",
-        position=3,
-        name="Default agent",
-        agent_id=default_agent_id,
-        conversation_objective=objective,
-        on_failure="continue",
-        config_json=json.dumps({
-            "objective": objective,
-            "allow_multi_turn": False,
-            "treat_failure_as_skipped": True,
-        }),
-    )
-    db.add(conversation_node)
+    #
+    # notification_only triggers (GitHub Projects) skip this node entirely so no
+    # LLM runs per event — the Notification node delivers the pre-composed text.
+    if not notification_only:
+        conversation_node = FlowNode(
+            flow_definition_id=flow.id,
+            type="conversation",
+            position=3,
+            name="Default agent",
+            agent_id=default_agent_id,
+            conversation_objective=objective,
+            on_failure="continue",
+            config_json=json.dumps({
+                "objective": objective,
+                "allow_multi_turn": False,
+                "treat_failure_as_skipped": True,
+            }),
+        )
+        db.add(conversation_node)
 
+    notification_config: dict[str, Any] = {
+        "enabled": bool(notification_enabled and notification_recipient),
+        "channel": "whatsapp",
+        "recipient": notification_recipient,
+    }
+    if notification_template:
+        notification_config["message_template"] = notification_template
     notification_node = FlowNode(
         flow_definition_id=flow.id,
         type="notification",
         position=4,
         name="Notification",
-        config_json=json.dumps({
-            "enabled": bool(notification_enabled and notification_recipient),
-            "channel": "whatsapp",
-            "recipient": notification_recipient,
-        }),
+        config_json=json.dumps(notification_config),
     )
     db.add(notification_node)
     db.flush()

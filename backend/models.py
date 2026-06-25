@@ -3720,6 +3720,92 @@ class GitHubChannelInstance(Base):
     )
 
 
+class GitHubProjectsChannelInstance(Base):
+    """Persisted GitHub Projects v2 trigger config for GraphQL-polled board events.
+
+    Mirrors :class:`JiraChannelInstance` (interval polling), but diffs a
+    per-item snapshot (:class:`GitHubProjectsItemState`) instead of advancing a
+    single cursor — detecting a Status *move* needs each item's previous value.
+    Credentials are read from the linked Hub ``GitHubIntegration`` at poll time;
+    no per-trigger PAT is stored here.
+    """
+
+    __tablename__ = "github_projects_channel_instance"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    integration_name = Column(String(100), nullable=False)
+    github_integration_id = Column(
+        Integer,
+        ForeignKey("github_integration.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    project_owner = Column(String(100), nullable=False)        # user/org login, e.g. "iamveene"
+    project_number = Column(Integer, nullable=False)           # the /projects/<N> number
+    project_node_id = Column(String(64), nullable=True)        # resolved GraphQL node id (cached)
+    project_name = Column(String(255), nullable=True)          # cached board title (for message text)
+    trigger_criteria = Column(JSON, nullable=True)
+    poll_interval_seconds = Column(Integer, default=300, nullable=False)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    notify_recipient_raw = Column(String(100), nullable=True)  # e.g. "@Vini" (resolved at send time)
+    notification_enabled = Column(Boolean, default=True, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    status = Column(String(20), default="active", nullable=False)
+    health_status = Column(String(20), default="unknown", nullable=False)
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+    last_activity_at = Column(DateTime, nullable=True)
+    seeded_at = Column(DateTime, nullable=True)               # first successful poll seeded the snapshot
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    github_integration = relationship("GitHubIntegration")
+
+    __table_args__ = (
+        Index("idx_ghp_channel_instance_tenant", "tenant_id"),
+        Index("idx_ghp_channel_instance_status", "status"),
+        Index("idx_ghp_channel_instance_default_agent_id", "default_agent_id"),
+        Index("idx_ghp_channel_instance_github_integration_id", "github_integration_id"),
+        Index("idx_ghp_channel_instance_project", "tenant_id", "project_owner", "project_number"),
+    )
+
+
+class GitHubProjectsItemState(Base):
+    """Per-item snapshot for diffing GitHub Projects v2 board state between polls.
+
+    One row per tracked project item. The diff engine compares the stored
+    ``status_value`` / ``assignees_json`` against the freshly polled state to
+    emit ``card_added`` / ``card_moved`` / ``card_assigned`` events, then upserts
+    here so the same change is never re-detected.
+    """
+
+    __tablename__ = "github_projects_item_state"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    instance_id = Column(
+        Integer,
+        ForeignKey("github_projects_channel_instance.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    item_node_id = Column(String(64), nullable=False)
+    content_type = Column(String(20), nullable=True)           # ISSUE | PULL_REQUEST | DRAFT_ISSUE
+    title = Column(Text, nullable=True)
+    url = Column(Text, nullable=True)
+    status_value = Column(String(255), nullable=True)          # resolved Status single-select value
+    assignees_json = Column(JSON, nullable=True)               # list[str] of assignee logins
+    last_updated_at = Column(DateTime, nullable=True)          # item.updatedAt from GraphQL
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("instance_id", "item_node_id", name="uq_ghp_item_state_instance_item"),
+        Index("idx_ghp_item_state_instance", "instance_id"),
+    )
+
+
 class GitLabChannelInstance(Base):
     """Persisted GitLab repository trigger configuration for token-gated webhooks."""
 
