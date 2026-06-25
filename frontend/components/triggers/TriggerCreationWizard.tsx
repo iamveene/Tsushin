@@ -19,6 +19,7 @@ import {
   type GitHubIntegration,
   type GitHubTrigger,
   type GitHubProjectsTrigger,
+  type GitHubCommitsTrigger,
   type GitLabIntegration,
   type GitLabTrigger,
   type JiraIntegration,
@@ -56,7 +57,7 @@ import {
   type IconProps,
 } from '@/components/ui/icons'
 
-export type TriggerId = 'email' | 'webhook' | 'jira' | 'github' | 'gitlab' | 'github_projects'
+export type TriggerId = 'email' | 'webhook' | 'jira' | 'github' | 'gitlab' | 'github_projects' | 'github_commits'
 
 export type SavedTriggerAny =
   | EmailTrigger
@@ -65,6 +66,7 @@ export type SavedTriggerAny =
   | GitLabTrigger
   | WebhookIntegration
   | GitHubProjectsTrigger
+  | GitHubCommitsTrigger
 
 interface Props {
   isOpen: boolean
@@ -164,6 +166,15 @@ const KIND_CATALOG: KindEntry[] = [
     iconClass: 'text-fuchsia-300',
     iconBg: 'bg-fuchsia-500/10',
   },
+  {
+    id: 'github_commits',
+    display_name: 'GitHub Commits',
+    description: 'Watch a GitHub repository branch and notify on new commits.',
+    setup_hint: 'Reuses a Hub GitHub connection. Polls the branch on an interval.',
+    Icon: GitHubIcon,
+    iconClass: 'text-emerald-300',
+    iconBg: 'bg-emerald-500/10',
+  },
 ]
 
 type WizardTone = 'default' | 'gmail' | 'whatsapp' | 'mcp'
@@ -174,6 +185,7 @@ const KIND_TONE: Record<TriggerId, WizardTone> = {
   github: 'default',
   gitlab: 'default',
   github_projects: 'default',
+  github_commits: 'default',
 }
 
 const KIND_ACCENT_BUTTON: Record<TriggerId, string> = {
@@ -183,6 +195,7 @@ const KIND_ACCENT_BUTTON: Record<TriggerId, string> = {
   github: 'bg-violet-600 hover:bg-violet-500 text-white',
   gitlab: 'bg-orange-600 hover:bg-orange-500 text-white',
   github_projects: 'bg-fuchsia-600 hover:bg-fuchsia-500 text-white',
+  github_commits: 'bg-emerald-600 hover:bg-emerald-500 text-white',
 }
 
 const getErrorMessage = (error: unknown, fallback: string) =>
@@ -366,6 +379,22 @@ const TRIGGER_PATH_GUIDES: Record<TriggerId, TriggerPathGuide> = {
       'The first poll seeds the snapshot silently; later changes fire notifications.',
     ],
   },
+  github_commits: {
+    headline: 'GitHub Commits polling path',
+    summary: 'Use this when a GitHub repository branch should notify WhatsApp on new commits. Tsushin polls the branch over the GitHub API and diffs the latest SHA.',
+    prerequisites: [
+      'A Hub GitHub connection under Developer Tools whose token can read the repository.',
+      'The repository owner and name, an optional branch (blank uses the default branch), a poll cadence, the delivery agent, and the notify recipient (e.g. @Playground).',
+    ],
+    criteria: [
+      'No filters in this version — every new commit on the watched branch is notified.',
+      'Use Test connection in the source step to confirm the token can read the branch before saving.',
+    ],
+    afterSave: [
+      'Tsushin polls the branch on the selected cadence and sends a deterministic templated WhatsApp message (no AI per event).',
+      'The first poll seeds the snapshot silently; later commits fire notifications.',
+    ],
+  },
 }
 
 function defaultEmailCriteriaSource(): CriteriaSourceValues {
@@ -483,6 +512,17 @@ export default function TriggerCreationWizard({
   const [ghpRecipient, setGhpRecipient] = useState('@Vini')
   const [ghpTesting, setGhpTesting] = useState(false)
   const [ghpTestResult, setGhpTestResult] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
+
+  // GitHub repository commits trigger (reuses the GitHub integration catalog).
+  const [ghcIntegrationName, setGhcIntegrationName] = useState('GitHub commits watcher')
+  const [ghcIntegrationId, setGhcIntegrationId] = useState<number | null>(null)
+  const [ghcOwner, setGhcOwner] = useState('')
+  const [ghcRepoName, setGhcRepoName] = useState('')
+  const [ghcBranch, setGhcBranch] = useState('')
+  const [ghcPollInterval, setGhcPollInterval] = useState('300')
+  const [ghcRecipient, setGhcRecipient] = useState('@Playground')
+  const [ghcTesting, setGhcTesting] = useState(false)
+  const [ghcTestResult, setGhcTestResult] = useState<{ tone: 'success' | 'error'; message: string } | null>(null)
   const [gitlabIntegrationName, setGitlabIntegrationName] = useState('GitLab project events')
   const [gitlabIntegrations, setGitlabIntegrations] = useState<GitLabIntegration[]>([])
   const [gitlabIntegrationsLoading, setGitlabIntegrationsLoading] = useState(false)
@@ -554,6 +594,15 @@ export default function TriggerCreationWizard({
     setGhpRecipient('@Vini')
     setGhpTesting(false)
     setGhpTestResult(null)
+    setGhcIntegrationName('GitHub commits watcher')
+    setGhcIntegrationId(null)
+    setGhcOwner('')
+    setGhcRepoName('')
+    setGhcBranch('')
+    setGhcPollInterval('300')
+    setGhcRecipient('@Playground')
+    setGhcTesting(false)
+    setGhcTestResult(null)
     setGitlabIntegrationName('GitLab project events')
     setSelectedGitlabIntegrationId(null)
     setGitlabProjectPath('')
@@ -800,6 +849,73 @@ export default function TriggerCreationWizard({
     }
   }
 
+  // GitHub Commits reuses the GitHub integration catalog; load it on its source step.
+  const [ghcIntegrationsFetched, setGhcIntegrationsFetched] = useState(false)
+  useEffect(() => {
+    if (!isOpen) {
+      setGhcIntegrationsFetched(false)
+      return
+    }
+    if (kind !== 'github_commits' || step < 2 || ghcIntegrationsFetched) return
+    let cancelled = false
+    setGithubIntegrationsLoading(true)
+    api.listGitHubIntegrations()
+      .then((list) => {
+        if (cancelled) return
+        setGithubIntegrations(list)
+        const firstActive = list.find((item) => item.is_active) || list[0]
+        if (firstActive) {
+          setGhcIntegrationId((current) => current ?? firstActive.id)
+          if (firstActive.default_owner) setGhcOwner((current) => current || firstActive.default_owner || '')
+          if (firstActive.default_repo) setGhcRepoName((current) => current || firstActive.default_repo || '')
+        }
+        setGhcIntegrationsFetched(true)
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setGithubIntegrations([])
+          setGhcIntegrationsFetched(true)
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setGithubIntegrationsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [ghcIntegrationsFetched, isOpen, kind, step])
+
+  const handleTestGhcConnection = async () => {
+    if (!ghcIntegrationId || !ghcOwner.trim() || !ghcRepoName.trim()) {
+      setGhcTestResult({ tone: 'error', message: 'Pick a connection and enter a valid repository owner + name first.' })
+      return
+    }
+    setGhcTesting(true)
+    setGhcTestResult(null)
+    try {
+      const res = await api.testGitHubCommitsConnection({
+        github_integration_id: ghcIntegrationId,
+        repo_owner: ghcOwner.trim(),
+        repo_name: ghcRepoName.trim(),
+        branch: ghcBranch.trim() || null,
+      })
+      if (res.ok) {
+        const shaShort = res.latest_sha ? res.latest_sha.slice(0, 7) : '—'
+        const summary = res.latest_message ? res.latest_message.split('\n')[0] : 'no commits yet'
+        setGhcTestResult({
+          tone: 'success',
+          message: `Connected: ${res.repo_full_name || `${ghcOwner.trim()}/${ghcRepoName.trim()}`}@${res.branch || ghcBranch.trim() || 'default'} — ${shaShort} "${summary}".`,
+        })
+      } else {
+        setGhcTestResult({ tone: 'error', message: res.error || 'Could not read the branch.' })
+      }
+    } catch (error: unknown) {
+      setGhcTestResult({ tone: 'error', message: getErrorMessage(error, 'Failed to test connection') })
+    } finally {
+      setGhcTesting(false)
+    }
+  }
+
   const [gitlabIntegrationsFetched, setGitlabIntegrationsFetched] = useState(false)
   useEffect(() => {
     if (!isOpen) {
@@ -940,6 +1056,19 @@ export default function TriggerCreationWizard({
           pollOk,
       )
     }
+    if (kind === 'github_commits') {
+      const pollNum = Number(ghcPollInterval)
+      const pollOk = Number.isFinite(pollNum) && pollNum >= 60 && pollNum <= 3600
+      return Boolean(
+        ghcIntegrationId &&
+          ghcIntegrationName.trim() &&
+          ghcOwner.trim() &&
+          ghcRepoName.trim() &&
+          defaultAgentId &&
+          ghcRecipient.trim() &&
+          pollOk,
+      )
+    }
     return false
   }, [
     emailCredentialsOk,
@@ -963,6 +1092,12 @@ export default function TriggerCreationWizard({
     ghpNumber,
     ghpPollInterval,
     ghpRecipient,
+    ghcIntegrationId,
+    ghcIntegrationName,
+    ghcOwner,
+    ghcRepoName,
+    ghcPollInterval,
+    ghcRecipient,
     repoName,
     repoOwner,
     selectedGithubIntegrationId,
@@ -1794,6 +1929,45 @@ export default function TriggerCreationWizard({
           onCreated?.('github_projects', result.id, flowId)
           return
         }
+
+        case 'github_commits': {
+          if (!ghcIntegrationName.trim()) {
+            throw new Error('Trigger name is required.')
+          }
+          if (!ghcIntegrationId) {
+            throw new Error('Pick a Hub GitHub integration to link this trigger to.')
+          }
+          if (!ghcOwner.trim()) {
+            throw new Error('Repository owner is required.')
+          }
+          if (!ghcRepoName.trim()) {
+            throw new Error('Repository name is required.')
+          }
+          if (!defaultAgentId) {
+            throw new Error('Pick the agent that will deliver commit notifications.')
+          }
+          const pollValue = Number(ghcPollInterval)
+          // Notification-only trigger: no Memory Recap (there is no conversation
+          // step to recall into), so persistRecapIfNeeded is intentionally skipped.
+          const result = await api.createGitHubCommitsTrigger({
+            integration_name: ghcIntegrationName.trim(),
+            github_integration_id: ghcIntegrationId,
+            repo_owner: ghcOwner.trim(),
+            repo_name: ghcRepoName.trim(),
+            branch: ghcBranch.trim() || null,
+            poll_interval_seconds: Number.isFinite(pollValue) ? pollValue : 300,
+            default_agent_id: defaultAgentId,
+            notify_recipient_raw: ghcRecipient.trim() || '@Playground',
+            notification_enabled: true,
+            is_active: isActive,
+          })
+          const flowId = result.auto_flow_id ?? null
+          setSavedTrigger(result)
+          setAutoFlowId(flowId)
+          setSaveState('success')
+          onCreated?.('github_commits', result.id, flowId)
+          return
+        }
       }
     } catch (error: unknown) {
       setSaveState('idle')
@@ -1810,6 +1984,13 @@ export default function TriggerCreationWizard({
     ghpOwner,
     ghpPollInterval,
     ghpRecipient,
+    ghcIntegrationId,
+    ghcIntegrationName,
+    ghcOwner,
+    ghcRepoName,
+    ghcBranch,
+    ghcPollInterval,
+    ghcRecipient,
     emailCriteriaSource,
     emailCriteriaText,
     emailIntegrationId,
@@ -2164,6 +2345,42 @@ export default function TriggerCreationWizard({
               onTestConnection={handleTestGhpConnection}
             />
           )}
+
+          {kind === 'github_commits' && (
+            <GitHubCommitsSourceBody
+              integrationName={ghcIntegrationName}
+              onIntegrationNameChange={setGhcIntegrationName}
+              integrations={githubIntegrations}
+              integrationsLoading={githubIntegrationsLoading}
+              selectedIntegrationId={ghcIntegrationId}
+              onIntegrationSelect={(next) => {
+                setGhcIntegrationId(next)
+                if (next) {
+                  const match = githubIntegrations.find((item) => item.id === next)
+                  if (match?.default_owner) setGhcOwner((current) => current || match.default_owner || '')
+                  if (match?.default_repo) setGhcRepoName((current) => current || match.default_repo || '')
+                }
+              }}
+              repoOwner={ghcOwner}
+              onRepoOwnerChange={setGhcOwner}
+              repoName={ghcRepoName}
+              onRepoNameChange={setGhcRepoName}
+              branch={ghcBranch}
+              onBranchChange={setGhcBranch}
+              pollInterval={ghcPollInterval}
+              onPollIntervalChange={setGhcPollInterval}
+              recipient={ghcRecipient}
+              onRecipientChange={setGhcRecipient}
+              agents={agents}
+              defaultAgentId={defaultAgentId}
+              onDefaultAgentChange={setDefaultAgentId}
+              isActive={isActive}
+              onIsActiveChange={setIsActive}
+              testing={ghcTesting}
+              testResult={ghcTestResult}
+              onTestConnection={handleTestGhcConnection}
+            />
+          )}
         </div>
       </Wizard>
     )
@@ -2295,6 +2512,16 @@ export default function TriggerCreationWizard({
               <p className="mt-1 text-xs">
                 This trigger sends a WhatsApp message for every new card, every assignment, and every column
                 move on the board. Per-event-type and per-phase filters are planned for a later version.
+              </p>
+            </div>
+          )}
+
+          {kind === 'github_commits' && (
+            <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-sm text-tsushin-slate">
+              <div className="font-medium text-white">No filters — notifies on every new commit</div>
+              <p className="mt-1 text-xs">
+                This trigger sends a WhatsApp message for every new commit on the watched branch. Per-author and
+                per-path filters are planned for a later version.
               </p>
             </div>
           )}
@@ -2556,6 +2783,8 @@ function sourceStepTitle(kind: TriggerId): string {
       return 'Connect a GitLab project to watch'
     case 'github_projects':
       return 'Connect a GitHub Projects board to watch'
+    case 'github_commits':
+      return 'Connect a GitHub repository branch to watch'
   }
 }
 
@@ -2573,6 +2802,8 @@ function sourceStepDescription(kind: TriggerId): string {
       return 'Pick a Hub GitLab integration, then wire a webhook so project events fire this trigger.'
     case 'github_projects':
       return 'Pick a Hub GitHub connection (PAT needs read:project), then enter the board owner and number. The board is polled on an interval.'
+    case 'github_commits':
+      return 'Pick a Hub GitHub connection, then enter the repository owner and name (and an optional branch). The branch is polled on an interval.'
   }
 }
 
@@ -2580,6 +2811,7 @@ function displayKind(kind: TriggerId): string {
   if (kind === 'gitlab') return 'GitLab'
   if (kind === 'github') return 'GitHub'
   if (kind === 'github_projects') return 'GitHub Projects'
+  if (kind === 'github_commits') return 'GitHub Commits'
   return kind.charAt(0).toUpperCase() + kind.slice(1)
 }
 
@@ -3594,6 +3826,251 @@ function GitHubProjectsSourceBody({
           <div>
             <div className="text-sm font-medium text-white">{isActive ? 'Active on save' : 'Create paused'}</div>
             <p className="mt-1 text-xs text-tsushin-slate">Paused triggers stop polling the board until resumed.</p>
+          </div>
+        </label>
+      </div>
+    </div>
+  )
+}
+
+interface GitHubCommitsSourceBodyProps {
+  integrationName: string
+  onIntegrationNameChange: (value: string) => void
+  integrations: GitHubIntegration[]
+  integrationsLoading: boolean
+  selectedIntegrationId: number | null
+  onIntegrationSelect: (id: number | null) => void
+  repoOwner: string
+  onRepoOwnerChange: (value: string) => void
+  repoName: string
+  onRepoNameChange: (value: string) => void
+  branch: string
+  onBranchChange: (value: string) => void
+  pollInterval: string
+  onPollIntervalChange: (value: string) => void
+  recipient: string
+  onRecipientChange: (value: string) => void
+  agents: Agent[]
+  defaultAgentId: number | null
+  onDefaultAgentChange: (id: number | null) => void
+  isActive: boolean
+  onIsActiveChange: (value: boolean) => void
+  testing: boolean
+  testResult: { tone: 'success' | 'error'; message: string } | null
+  onTestConnection: () => void
+}
+
+function GitHubCommitsSourceBody({
+  integrationName,
+  onIntegrationNameChange,
+  integrations,
+  integrationsLoading,
+  selectedIntegrationId,
+  onIntegrationSelect,
+  repoOwner,
+  onRepoOwnerChange,
+  repoName,
+  onRepoNameChange,
+  branch,
+  onBranchChange,
+  pollInterval,
+  onPollIntervalChange,
+  recipient,
+  onRecipientChange,
+  agents,
+  defaultAgentId,
+  onDefaultAgentChange,
+  isActive,
+  onIsActiveChange,
+  testing,
+  testResult,
+  onTestConnection,
+}: GitHubCommitsSourceBodyProps) {
+  const idPrefix = useId()
+  const nameId = `${idPrefix}-name`
+  const connId = `${idPrefix}-conn`
+  const ownerId = `${idPrefix}-owner`
+  const repoId = `${idPrefix}-repo`
+  const branchId = `${idPrefix}-branch`
+  const pollId = `${idPrefix}-poll`
+  const recipientId = `${idPrefix}-recipient`
+  const agentId = `${idPrefix}-agent`
+  const pollNum = Number(pollInterval)
+  const pollValid = Number.isFinite(pollNum) && pollNum >= 60 && pollNum <= 3600
+
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="space-y-2">
+          <label htmlFor={nameId} className="block text-sm font-medium text-white">
+            Trigger Name <span className="text-red-400">*</span>
+          </label>
+          <input
+            id={nameId}
+            type="text"
+            value={integrationName}
+            onChange={(event) => onIntegrationNameChange(event.target.value)}
+            placeholder="GitHub commits watcher"
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor={connId} className="block text-sm font-medium text-white">
+            GitHub Connection <span className="text-red-400">*</span>
+          </label>
+          <select
+            id={connId}
+            value={selectedIntegrationId ?? ''}
+            onChange={(event) => onIntegrationSelect(event.target.value ? Number(event.target.value) : null)}
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+          >
+            <option value="">
+              {integrationsLoading ? 'Loading GitHub connections…' : 'Select a GitHub connection'}
+            </option>
+            {integrations.map((integration) => (
+              <option key={integration.id} value={integration.id}>
+                {integration.integration_name || integration.name || `GitHub connection #${integration.id}`}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-tsushin-slate">
+            The PAT on this connection must be able to read the repository.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor={ownerId} className="block text-sm font-medium text-white">
+            Repository Owner <span className="text-red-400">*</span>
+          </label>
+          <input
+            id={ownerId}
+            type="text"
+            value={repoOwner}
+            onChange={(event) => onRepoOwnerChange(event.target.value)}
+            placeholder="iamveene"
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+          />
+          <p className="text-xs text-tsushin-slate">
+            User or org login from the repo URL, e.g. <code className="text-emerald-300">github.com/iamveene/tsushin</code>.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor={repoId} className="block text-sm font-medium text-white">
+            Repository Name <span className="text-red-400">*</span>
+          </label>
+          <input
+            id={repoId}
+            type="text"
+            value={repoName}
+            onChange={(event) => onRepoNameChange(event.target.value)}
+            placeholder="tsushin"
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor={branchId} className="block text-sm font-medium text-white">
+            Branch
+          </label>
+          <input
+            id={branchId}
+            type="text"
+            value={branch}
+            onChange={(event) => onBranchChange(event.target.value)}
+            placeholder="develop — leave blank for the default branch"
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+          />
+          <p className="text-xs text-tsushin-slate">
+            Leave blank to watch the repository&apos;s default branch.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor={pollId} className="block text-sm font-medium text-white">
+            Poll Interval (seconds) <span className="text-red-400">*</span>
+          </label>
+          <input
+            id={pollId}
+            type="number"
+            min={60}
+            max={3600}
+            step={60}
+            value={pollInterval}
+            onChange={(event) => onPollIntervalChange(event.target.value)}
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+          />
+          <p className={`text-xs ${pollValid ? 'text-tsushin-slate' : 'text-amber-300'}`}>
+            Use a value between 60 and 3600 seconds (default 300).
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor={recipientId} className="block text-sm font-medium text-white">
+            Notify recipient <span className="text-red-400">*</span>
+          </label>
+          <input
+            id={recipientId}
+            type="text"
+            value={recipient}
+            onChange={(event) => onRecipientChange(event.target.value)}
+            placeholder="@Playground"
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white placeholder:text-tsushin-slate focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+          />
+          <p className="text-xs text-tsushin-slate">
+            Contact name, <code className="text-emerald-300">@mention</code>, or phone number to receive commit notifications.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <label htmlFor={agentId} className="block text-sm font-medium text-white">
+            Delivery agent <span className="text-red-400">*</span>
+          </label>
+          <select
+            id={agentId}
+            value={defaultAgentId ?? ''}
+            onChange={(event) => onDefaultAgentChange(event.target.value ? Number(event.target.value) : null)}
+            className="w-full rounded-xl border border-tsushin-border bg-tsushin-slate/10 px-3 py-2 text-sm text-white focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+          >
+            <option value="">Select an agent</option>
+            {agents.map((agent) => (
+              <option key={agent.id} value={agent.id}>
+                {agent.contact_name}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-tsushin-slate">
+            Notifications are sent through this agent&apos;s WhatsApp connection (no AI is invoked per event).
+          </p>
+        </div>
+
+        <div className="space-y-2 md:col-span-2">
+          <button
+            type="button"
+            onClick={onTestConnection}
+            disabled={testing}
+            className="inline-flex items-center gap-2 rounded-lg border border-emerald-400/40 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-100 hover:text-white disabled:opacity-50"
+          >
+            {testing ? 'Testing…' : 'Test connection'}
+          </button>
+          {testResult && (
+            <p className={`text-xs ${testResult.tone === 'success' ? 'text-emerald-300' : 'text-amber-300'}`}>
+              {testResult.message}
+            </p>
+          )}
+        </div>
+
+        <label className="flex items-center gap-3 rounded-2xl border border-tsushin-border/70 bg-tsushin-slate/5 p-4 md:col-span-2">
+          <input
+            type="checkbox"
+            checked={isActive}
+            onChange={(event) => onIsActiveChange(event.target.checked)}
+            className="h-4 w-4 rounded border-white/20 bg-[#0a0a0f] text-emerald-500 focus:ring-emerald-500"
+          />
+          <div>
+            <div className="text-sm font-medium text-white">{isActive ? 'Active on save' : 'Create paused'}</div>
+            <p className="mt-1 text-xs text-tsushin-slate">Paused triggers stop polling the branch until resumed.</p>
           </div>
         </label>
       </div>
