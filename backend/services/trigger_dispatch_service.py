@@ -36,6 +36,7 @@ from models import (
     EmailChannelInstance,
     FlowTriggerBinding,
     GitHubChannelInstance,
+    GitHubProjectsChannelInstance,
     GitLabChannelInstance,
     JiraChannelInstance,
     SentinelConfig,
@@ -138,6 +139,7 @@ class TriggerDispatchService:
         "email": EmailChannelInstance,
         "jira": JiraChannelInstance,
         "github": GitHubChannelInstance,
+        "github_projects": GitHubProjectsChannelInstance,
         "gitlab": GitLabChannelInstance,
     }
     _ACTIVE_STATUS = "active"

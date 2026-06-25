@@ -24,6 +24,7 @@ from hub.github.github_repository_service import (
     GitHubRepositoryError,
     GitHubRepositoryService,
 )
+from hub.github.github_projects_service import GitHubProjectsError, GitHubProjectsService
 from hub.gitlab.gitlab_repository_service import GitLabRepositoryError, GitLabRepositoryService
 
 
@@ -37,6 +38,12 @@ _ACTION_TO_CAPABILITY: Dict[str, str] = {
     "read_pull_request": "read_pull_request",
     "list_issues": "list_issues",
     "read_issue": "read_issue",
+    # GitHub read actions (branches/commits via REST; projects via GraphQL).
+    "list_branches": "list_branches",
+    "list_commits": "list_commits",
+    "list_projects": "list_projects",
+    "read_project": "read_project",
+    "list_project_items": "list_project_items",
     "create_issue": "create_issue",
     "add_pr_comment": "add_pr_comment",
     # PR workflow write actions — full agent-driven PR lifecycle support.
@@ -54,6 +61,11 @@ _ACTION_ORDER: List[str] = [
     "read_pull_request",
     "list_issues",
     "read_issue",
+    "list_branches",
+    "list_commits",
+    "list_projects",
+    "read_project",
+    "list_project_items",
     "create_issue",
     "add_pr_comment",
     "approve_pull_request",
@@ -69,6 +81,20 @@ _READ_ACTIONS = {
     "read_pull_request",
     "list_issues",
     "read_issue",
+    "list_branches",
+    "list_commits",
+    "list_projects",
+    "read_project",
+    "list_project_items",
+}
+# GitHub-only reads: GitLab has no Projects v2, and branches/commits are
+# implemented on the GitHub REST service only. Excluded for other providers.
+_GITHUB_ONLY_ACTIONS = {
+    "list_branches",
+    "list_commits",
+    "list_projects",
+    "read_project",
+    "list_project_items",
 }
 _WRITE_ACTIONS = {
     "create_issue",
@@ -92,8 +118,9 @@ class CodeRepositorySkill(BaseSkill):
     skill_type = "code_repository"
     skill_name = "Code Repository"
     skill_description = (
-        "Search repos, read pull requests and issues, and (when enabled) post "
-        "comments / create issues through a connected repository provider."
+        "Search repos; read pull requests, issues, branches, commits, and GitHub "
+        "Projects boards; and (when enabled) post comments / create issues "
+        "through a connected repository provider."
     )
     execution_mode = "tool"
     # Tool-only — no keyword/raw-text path. Wizard-visible so it appears in the
@@ -192,6 +219,33 @@ class CodeRepositorySkill(BaseSkill):
         self._provider = provider
         return self._repo_service
 
+    def _get_projects_service(self, config: Optional[Dict[str, Any]] = None) -> GitHubProjectsService:
+        """Construct a GitHub Projects v2 GraphQL client from the configured integration.
+
+        GitHub-only (Projects v2 is a GitHub feature). Reuses the same
+        ``GitHubIntegration`` row the repo service uses.
+        """
+        config = config or getattr(self, "_config", {}) or {}
+        integration_id = self._resolve_integration_id(config)
+        if not integration_id:
+            raise GitHubProjectsError(
+                "Code Repository integration not configured. Open the agent's Skills tab and "
+                "select a GitHub connection."
+            )
+        if not self._db_session:
+            raise GitHubProjectsError("Database session unavailable for code_repository skill.")
+        from models import Agent
+
+        agent_id = getattr(self, "_agent_id", None)
+        agent = (
+            self._db_session.query(Agent).filter(Agent.id == agent_id).first()
+            if agent_id
+            else None
+        )
+        if agent is None:
+            raise GitHubProjectsError("Agent context missing for code_repository skill.")
+        return GitHubProjectsService(self._db_session, agent.tenant_id, integration_id)
+
     def _enabled_actions(self, config: Optional[Dict[str, Any]] = None) -> List[str]:
         config = config or getattr(self, "_config", {}) or {}
         provider = str(config.get("provider") or self._provider or "github").strip().lower()
@@ -200,6 +254,8 @@ class CodeRepositorySkill(BaseSkill):
         enabled: List[str] = []
         for action in _ACTION_ORDER:
             if provider == "gitlab" and action in _WRITE_ACTIONS:
+                continue
+            if provider != "github" and action in _GITHUB_ONLY_ACTIONS:
                 continue
             cap_key = _ACTION_TO_CAPABILITY[action]
             default_entry = defaults.get(cap_key, {}) or {}
@@ -264,7 +320,12 @@ class CodeRepositorySkill(BaseSkill):
                     "'list_pull_requests' (PRs in a repo), "
                     "'read_pull_request' (single PR detail), "
                     "'list_issues' (issues in a repo, PRs filtered out), "
-                    "'read_issue' (single issue detail)."
+                    "'read_issue' (single issue detail), "
+                    "'list_branches' (repo branches), "
+                    "'list_commits' (recent commits; optional 'branch'), "
+                    "'list_projects' (Projects v2 boards for an owner), "
+                    "'read_project' (board by 'project_number'), "
+                    "'list_project_items' (a board's cards)."
                     + (
                         " Write actions: 'create_issue', 'add_pr_comment', "
                         "'approve_pull_request' (submit APPROVE review), "
@@ -306,6 +367,15 @@ class CodeRepositorySkill(BaseSkill):
                 "type": "integer",
                 "description": "Issue number for 'read_issue'.",
                 "minimum": 1,
+            },
+            "project_number": {
+                "type": "integer",
+                "description": "GitHub Projects v2 board number (the /projects/<N> number) for 'read_project' and 'list_project_items'.",
+                "minimum": 1,
+            },
+            "branch": {
+                "type": "string",
+                "description": "Optional branch or SHA for 'list_commits' (defaults to the repo's default branch).",
             },
             "state": {
                 "type": "string",
@@ -439,7 +509,7 @@ class CodeRepositorySkill(BaseSkill):
 
         try:
             repo = self._get_repo_service(config)
-        except (GitHubRepositoryError, GitLabRepositoryError) as e:
+        except (GitHubRepositoryError, GitHubProjectsError, GitLabRepositoryError) as e:
             return SkillResult(
                 success=False,
                 output=str(e),
@@ -457,6 +527,17 @@ class CodeRepositorySkill(BaseSkill):
                 return await self._action_list_issues(repo, arguments)
             if action == "read_issue":
                 return await self._action_read_issue(repo, arguments)
+            if action == "list_branches":
+                return await self._action_list_branches(repo, arguments)
+            if action == "list_commits":
+                return await self._action_list_commits(repo, arguments)
+            if action in ("list_projects", "read_project", "list_project_items"):
+                projects = self._get_projects_service(config)
+                if action == "list_projects":
+                    return await self._action_list_projects(projects, arguments)
+                if action == "read_project":
+                    return await self._action_read_project(projects, arguments)
+                return await self._action_list_project_items(projects, arguments)
             if action == "create_issue":
                 return await self._action_create_issue(repo, arguments)
             if action == "add_pr_comment":
@@ -471,7 +552,7 @@ class CodeRepositorySkill(BaseSkill):
                 return await self._action_close_pull_request(repo, arguments)
             if action == "close_issue":
                 return await self._action_close_issue(repo, arguments)
-        except (GitHubRepositoryError, GitLabRepositoryError) as e:
+        except (GitHubRepositoryError, GitHubProjectsError, GitLabRepositoryError) as e:
             logger.info("CodeRepositorySkill action=%s failed: %s", action, e)
             return SkillResult(
                 success=False,
@@ -778,6 +859,190 @@ class CodeRepositorySkill(BaseSkill):
             },
         )
 
+    async def _action_list_branches(
+        self,
+        repo_service: GitHubRepositoryService,
+        arguments: Dict[str, Any],
+    ) -> SkillResult:
+        owner, repo = self._resolve_owner_repo(repo_service, arguments)
+        if not owner or not repo:
+            return SkillResult(
+                success=False,
+                output="'owner' and 'repo' are required for 'list_branches'.",
+                metadata={"error": "missing_owner_repo"},
+            )
+        max_results = int(arguments.get("max_results") or 30)
+        branches = await repo_service.list_branches(owner, repo, max_results=max_results)
+        names = [str(b.get("name")) for b in branches if b.get("name")]
+        if not names:
+            return SkillResult(
+                success=True,
+                output=f"No branches found in {owner}/{repo}.",
+                metadata={"action": "list_branches", "count": 0, "owner": owner, "repo": repo},
+            )
+        lines = [f"{len(names)} branch(es) in `{owner}/{repo}`:"] + [f"- {n}" for n in names]
+        return SkillResult(
+            success=True,
+            output="\n".join(lines),
+            metadata={
+                "action": "list_branches",
+                "count": len(names),
+                "owner": owner,
+                "repo": repo,
+                "branches": names,
+            },
+        )
+
+    async def _action_list_commits(
+        self,
+        repo_service: GitHubRepositoryService,
+        arguments: Dict[str, Any],
+    ) -> SkillResult:
+        owner, repo = self._resolve_owner_repo(repo_service, arguments)
+        if not owner or not repo:
+            return SkillResult(
+                success=False,
+                output="'owner' and 'repo' are required for 'list_commits'.",
+                metadata={"error": "missing_owner_repo"},
+            )
+        branch = (arguments.get("branch") or "").strip() or None
+        max_results = int(arguments.get("max_results") or 20)
+        commits = await repo_service.list_commits(owner, repo, sha=branch, max_results=max_results)
+        if not commits:
+            return SkillResult(
+                success=True,
+                output=f"No commits found in {owner}/{repo}.",
+                metadata={"action": "list_commits", "count": 0, "owner": owner, "repo": repo},
+            )
+        header = f"{len(commits)} recent commit(s) in `{owner}/{repo}`"
+        if branch:
+            header += f" on `{branch}`"
+        lines = [header + ":"]
+        compact: List[Dict[str, Any]] = []
+        for c in commits:
+            sha = str(c.get("sha") or "")[:7]
+            commit = c.get("commit") or {}
+            msg = str((commit.get("message") or "").split("\n", 1)[0])[:100]
+            author = ((commit.get("author") or {}).get("name")) or ""
+            lines.append(f"- `{sha}` {msg}" + (f" — {author}" if author else ""))
+            compact.append({"sha": sha, "message": msg, "author": author})
+        return SkillResult(
+            success=True,
+            output="\n".join(lines),
+            metadata={
+                "action": "list_commits",
+                "count": len(commits),
+                "owner": owner,
+                "repo": repo,
+                "branch": branch,
+                "commits": compact,
+            },
+        )
+
+    async def _action_list_projects(
+        self,
+        projects_service: GitHubProjectsService,
+        arguments: Dict[str, Any],
+    ) -> SkillResult:
+        owner = (arguments.get("owner") or "").strip()
+        if not owner:
+            return SkillResult(
+                success=False,
+                output="'owner' is required for 'list_projects'.",
+                metadata={"error": "missing_owner"},
+            )
+        boards = await projects_service.list_projects(owner)
+        if not boards:
+            return SkillResult(
+                success=True,
+                output=f"No Projects v2 boards found for {owner}.",
+                metadata={"action": "list_projects", "count": 0, "owner": owner},
+            )
+        lines = [f"{len(boards)} project board(s) for `{owner}`:"]
+        compact: List[Dict[str, Any]] = []
+        for b in boards:
+            num = b.get("number")
+            title = b.get("title") or "(untitled)"
+            url = b.get("url")
+            lines.append(f"- #{num} {title}" + (f" — {url}" if url else ""))
+            compact.append({"number": num, "title": title, "url": url, "closed": b.get("closed")})
+        return SkillResult(
+            success=True,
+            output="\n".join(lines),
+            metadata={"action": "list_projects", "count": len(boards), "owner": owner, "projects": compact},
+        )
+
+    async def _action_read_project(
+        self,
+        projects_service: GitHubProjectsService,
+        arguments: Dict[str, Any],
+    ) -> SkillResult:
+        owner = (arguments.get("owner") or "").strip()
+        number = arguments.get("project_number")
+        if not owner or not number:
+            return SkillResult(
+                success=False,
+                output="'owner' and 'project_number' are required for 'read_project'.",
+                metadata={"error": "missing_project_ref"},
+            )
+        info = await projects_service.read_project(owner, int(number))
+        title = info.get("title") or "(untitled)"
+        url = info.get("url")
+        out = f"Project #{info.get('number')} — {title}" + (f"\n{url}" if url else "")
+        return SkillResult(
+            success=True,
+            output=out,
+            metadata={"action": "read_project", "owner": owner, "project": info},
+        )
+
+    async def _action_list_project_items(
+        self,
+        projects_service: GitHubProjectsService,
+        arguments: Dict[str, Any],
+    ) -> SkillResult:
+        owner = (arguments.get("owner") or "").strip()
+        number = arguments.get("project_number")
+        if not owner or not number:
+            return SkillResult(
+                success=False,
+                output="'owner' and 'project_number' are required for 'list_project_items'.",
+                metadata={"error": "missing_project_ref"},
+            )
+        node_id = await projects_service.get_project_id(owner, int(number))
+        items = await projects_service.fetch_board_items(node_id)
+        active = [it for it in items if not it.get("is_archived")]
+        if not active:
+            return SkillResult(
+                success=True,
+                output=f"No items on project #{number} for {owner}.",
+                metadata={"action": "list_project_items", "count": 0, "owner": owner, "project_number": int(number)},
+            )
+        lines = [f"{len(active)} item(s) on project #{number}:"]
+        compact: List[Dict[str, Any]] = []
+        for it in active:
+            title = it.get("title") or "(untitled)"
+            st = it.get("status_value") or "—"
+            assignees = ", ".join(it.get("assignees") or [])
+            lines.append(f"- {title} [{st}]" + (f" (assignees: {assignees})" if assignees else ""))
+            compact.append({
+                "title": title,
+                "status": st,
+                "assignees": it.get("assignees") or [],
+                "url": it.get("url"),
+                "type": it.get("content_type"),
+            })
+        return SkillResult(
+            success=True,
+            output="\n".join(lines),
+            metadata={
+                "action": "list_project_items",
+                "count": len(active),
+                "owner": owner,
+                "project_number": int(number),
+                "items": compact,
+            },
+        )
+
     async def _action_create_issue(
         self,
         repo_service: GitHubRepositoryService,
@@ -978,6 +1243,31 @@ class CodeRepositorySkill(BaseSkill):
                     "enabled": True,
                     "label": "Read issue (read)",
                     "description": "Fetch one issue's details",
+                },
+                "list_branches": {
+                    "enabled": True,
+                    "label": "List branches (read)",
+                    "description": "List a repository's branches (GitHub)",
+                },
+                "list_commits": {
+                    "enabled": True,
+                    "label": "List commits (read)",
+                    "description": "List recent commits on a repo/branch (GitHub)",
+                },
+                "list_projects": {
+                    "enabled": True,
+                    "label": "List project boards (read)",
+                    "description": "List an owner's GitHub Projects v2 boards",
+                },
+                "read_project": {
+                    "enabled": True,
+                    "label": "Read project board (read)",
+                    "description": "Read one GitHub Projects v2 board by number",
+                },
+                "list_project_items": {
+                    "enabled": True,
+                    "label": "List project items (read)",
+                    "description": "List the cards/items on a GitHub Projects v2 board",
                 },
                 "create_issue": {
                     "enabled": False,

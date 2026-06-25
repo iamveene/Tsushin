@@ -1878,6 +1878,62 @@ export interface JiraTriggerCreateRequest {
 
 export type JiraTriggerUpdateRequest = Partial<JiraTriggerCreateRequest>
 
+export interface GitHubProjectsTrigger extends TriggerInstanceBase {
+  github_integration_id: number
+  github_integration_name?: string | null
+  project_owner: string
+  project_number: number
+  project_node_id?: string | null
+  project_name?: string | null
+  poll_interval_seconds: number
+  notify_recipient_raw?: string | null
+  notification_enabled: boolean
+  seeded_at?: string | null
+}
+
+export interface GitHubProjectsTriggerCreateRequest {
+  integration_name: string
+  github_integration_id: number
+  project_owner: string
+  project_number: number
+  poll_interval_seconds?: number
+  default_agent_id: number
+  notify_recipient_raw?: string
+  notification_enabled?: boolean
+  trigger_criteria?: TriggerCriteria | null
+  is_active?: boolean
+}
+
+export type GitHubProjectsTriggerUpdateRequest = Partial<GitHubProjectsTriggerCreateRequest>
+
+export interface GitHubProjectsTestConnectionRequest {
+  github_integration_id: number
+  project_owner: string
+  project_number: number
+}
+
+export interface GitHubProjectsTestConnectionResponse {
+  ok: boolean
+  project_node_id?: string | null
+  title?: string | null
+  url?: string | null
+  number?: number | null
+  error?: string | null
+}
+
+export interface GitHubProjectsPollNowResponse {
+  instance_id: number
+  status: string
+  fetched_count: number
+  event_count: number
+  dispatched_count: number
+  duplicate_count: number
+  skipped_count: number
+  seeded: boolean
+  reason?: string | null
+  dispatch_statuses: string[]
+}
+
 export interface JiraTriggerTestQueryRequest {
   jira_integration_id?: number | null
   jql?: string | null
@@ -2689,7 +2745,7 @@ export interface ChannelRoutingRuleReorderRequest {
 export type ChannelRoutingRuleListParams = PageParams
 
 export type TriggerDetailKind = TriggerKind
-export type TriggerDetail = EmailTrigger | WebhookIntegration | JiraTrigger | GitHubTrigger | GitLabTrigger
+export type TriggerDetail = EmailTrigger | WebhookIntegration | JiraTrigger | GitHubTrigger | GitLabTrigger | GitHubProjectsTrigger
 
 // v0.7.0 Wave 4: Triggers ↔ Flows binding model
 export interface FlowTriggerBinding {
@@ -3442,10 +3498,10 @@ export interface BrowserGroupCompiled {
     config_json: BrowserGroupChildConfig & Record<string, any>
     timeout_seconds?: number
   }>
-  // Non-browser steps the recorder auto-wires AFTER the group (e.g. a
-  // data_transform that normalizes a captured timeline + a notification that
-  // sends the structured update). Empty unless the recording captured a
-  // "timeline" marker. Inserted as flat flow steps, each with its own type.
+  // Non-browser steps the recorder auto-wires AFTER the group (a
+  // data_transform — `capture` — that exposes the captured region as
+  // {{capture.data_preview.*}}). Empty unless the recording captured an
+  // "area" marker. Inserted as flat flow steps, each with its own type.
   trailing_nodes?: Array<{
     name: string
     type: string
@@ -7822,6 +7878,65 @@ export const api = {
       method: 'DELETE',
     })
     if (!res.ok) await handleApiError(res, 'Failed to delete Jira trigger')
+  },
+
+  async listGitHubProjectsTriggers(): Promise<GitHubProjectsTrigger[]> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github-projects`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch GitHub Projects triggers')
+    return res.json()
+  },
+
+  async getGitHubProjectsTrigger(id: number): Promise<GitHubProjectsTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github-projects/${id}`)
+    if (!res.ok) await handleApiError(res, 'Failed to fetch GitHub Projects trigger')
+    return res.json()
+  },
+
+  async createGitHubProjectsTrigger(data: GitHubProjectsTriggerCreateRequest): Promise<GitHubProjectsTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github-projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to create GitHub Projects trigger')
+    return res.json()
+  },
+
+  async updateGitHubProjectsTrigger(id: number, data: GitHubProjectsTriggerUpdateRequest): Promise<GitHubProjectsTrigger> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github-projects/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to update GitHub Projects trigger')
+    return res.json()
+  },
+
+  async deleteGitHubProjectsTrigger(id: number): Promise<void> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github-projects/${id}`, {
+      method: 'DELETE',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to delete GitHub Projects trigger')
+  },
+
+  async testGitHubProjectsConnection(
+    data: GitHubProjectsTestConnectionRequest,
+  ): Promise<GitHubProjectsTestConnectionResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github-projects/test-connection`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to test GitHub Projects connection')
+    return res.json()
+  },
+
+  async pollGitHubProjectsTriggerNow(id: number): Promise<GitHubProjectsPollNowResponse> {
+    const res = await authenticatedFetch(`${API_URL}/api/triggers/github-projects/${id}/poll-now`, {
+      method: 'POST',
+    })
+    if (!res.ok) await handleApiError(res, 'Failed to poll GitHub Projects trigger')
+    return res.json()
   },
 
   async testJiraTriggerQuery(data: JiraTriggerTestQueryRequest): Promise<JiraTriggerTestQueryResponse> {

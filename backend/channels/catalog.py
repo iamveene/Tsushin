@@ -105,6 +105,14 @@ TRIGGER_CATALOG: List[EntryPointInfo] = [
         setup_hint="Create a GitLab trigger under Hub → Triggers.",
         icon_hint="gitlab",
     ),
+    EntryPointInfo(
+        id="github_projects",
+        display_name="GitHub Projects",
+        description="Watch a GitHub Projects v2 board and notify on new / assigned / moved cards.",
+        requires_setup=True,
+        setup_hint="Create a GitHub Projects trigger under Hub → Triggers.",
+        icon_hint="github",
+    ),
 ]
 
 
