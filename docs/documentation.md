@@ -2354,6 +2354,25 @@ The trigger detail page previously only listed `flow_trigger_binding` rows even 
 
 The change also fixes a class of bogus auto-flow run failures that surfaced on the trigger detail page when the originating wake event lacked a recipient — the auto-generated Notification step now resolves recipients consistently with manual flows.
 
+### 14.3.3 GitHub Projects (v2) board trigger — polling (2026-06-25)
+
+GitHub emits `projects_v2_item` webhooks only for **organization-owned** projects, so a **user-owned** Projects v2 board cannot be observed by any repository webhook. The `github_projects` trigger therefore **polls** the board over the Projects v2 **GraphQL** API and diffs state — the same poll → dispatch → notify shape as the Jira trigger, but with a per-item snapshot instead of a scalar cursor (detecting a column move needs each item's previous Status).
+
+- **Events:** `card_added` (new item on the board), `card_assigned` (an assignee added to an item), `card_moved` (the **Status** single-select changed, carrying `from_status` → `to_status` + detection time). The first poll seeds the snapshot silently to avoid backfilling existing cards as "new".
+- **Config:** reuses a Hub `GitHubIntegration` (the PAT must include `read:project`); stores `project_owner`, `project_number`, `poll_interval_seconds` (default 300, bounds 60–86400), a required `default_agent_id`, and `notify_recipient_raw` (e.g. `@Vini`). State lives in `GitHubProjectsChannelInstance` + a per-item `GitHubProjectsItemState` snapshot (Alembic `0102`).
+- **Delivery is deterministic (no LLM per event).** The trigger pre-composes the WhatsApp message into `payload.message` and dispatches through `TriggerDispatchService`; the auto-generated system-managed Flow is **notification-only** (Source → Gate → Notification, no Conversation node — set via the new `notification_only` / `notification_template` options on `ensure_system_managed_flow_for_trigger`) and the Notification node renders `{{source.payload.message}}`. The `default_agent_id` exists so dispatch fans out to the bound flow and to resolve the sending tenant's WhatsApp MCP — it is not invoked as an LLM per board change.
+- **API:** `/api/triggers/github-projects` (CRUD), `/{id}/poll-now` (force a poll), `/{id}/test-connection` and `/test-connection` (verify the PAT can read the board — surfaces a clear error when `read:project` is missing). The scheduler calls `GitHubProjectsTrigger.poll_active()` each cycle alongside Jira/Email.
+- **Actor limitation:** the Projects v2 item node exposes no actor for field changes on a user board, so "who moved a card" is generally unavailable; messages carry reliable *what* (from → to) + *when*. Migrating the board to an Organization unlocks `projects_v2_item` webhooks whose payload includes `sender`.
+
+### 14.3.4 GitHub commits trigger — polling (2026-06-25)
+
+GitHub *does* emit `push` webhooks, but they cannot reach a deployment whose public origin is gated by a source-IP allowlist (e.g. the Cloudflare WAF in front of `tsushin.archsec.io`, which GitHub's webhook IPs do not traverse). The `github_commits` trigger therefore **polls** a repo branch's commits over the GitHub **REST** API and diffs SHAs — the same poll → dispatch → notify shape as Jira, with a single scalar `last_seen_sha` cursor (commits on a branch are linear, so no per-item snapshot is needed — simpler than `github_projects`).
+
+- **Event:** one notification per **new commit** on the watched branch. The first poll seeds the cursor silently (no history backfill). If more than the page size (20) land between polls, the overflow is skipped and the cursor jumps to the newest SHA (a flood guard); dispatch-side dedupe (`gh_commit:<id>:<sha>`) prevents duplicates.
+- **Config:** reuses a Hub `GitHubIntegration` (any PAT with `repo` read); stores `repo_owner`, `repo_name`, `branch` (NULL = repo default branch), `poll_interval_seconds` (default 300, bounds 60–86400), a required `default_agent_id`, and `notify_recipient_raw` (e.g. `@Playground`). State lives in `GitHubCommitsChannelInstance` (Alembic `0103`) — just the cursor, no snapshot table.
+- **Delivery is deterministic (no LLM per commit).** The trigger pre-composes `payload.message` (`🔨 New commit on <owner>/<repo>@<branch>: "<subject>" — <author> (<short-sha>). <url>`) and dispatches through `TriggerDispatchService`; the auto-generated Flow is **notification-only** (Source → Gate → Notification) rendering `{{source.payload.message}}`. The `default_agent_id` resolves the sending tenant WhatsApp MCP; it is not invoked as an LLM.
+- **API:** `/api/triggers/github-commits` (CRUD), `/{id}/poll-now` (force a poll), `/{id}/test-connection` and `/test-connection` (verify the PAT can read the repo/branch — returns the latest commit). The scheduler calls `GitHubCommitsTrigger.poll_active()` each cycle alongside Jira/Email/GitHub Projects.
+
 ### 14.4 Triggered Flow Creation from Flows
 
 `/flows` > Create New Flow supports Triggered as a first-class execution method. The Triggered path asks the operator to select an existing Hub trigger: Email/Gmail, Jira, GitHub, GitLab, or Webhook. Schedule is not a Hub trigger kind, and Continuous Agents are not selectable as a Flow builder source.
@@ -3617,7 +3636,7 @@ Disabled capabilities are filtered out of the per-agent OpenAI/Anthropic tool sc
 
 **Sources:** `backend/services/github_integration_service.py`, `backend/api/routes_github_integrations.py`, `backend/agent/skills/code_repository_skill.py`, `backend/channels/github/criteria.py`, `frontend/app/hub/page.tsx` (GitHubIntegrationModal).
 
-GitHub is a polymorphic subclass of `HubIntegration` that ships in v0.7.0 alongside the `code_repository` skill (§9.1) and the GitHub trigger criteria envelope (§14.3 wizard step 3). One integration row provides credentials for both the agent-facing skill and the trigger pipeline.
+GitHub is a polymorphic subclass of `HubIntegration` that ships in v0.7.0 alongside the `code_repository` skill (§9.1) and the GitHub trigger criteria envelope (§14.3 wizard step 3). One integration row provides credentials for both the agent-facing skill and the trigger pipeline. The same row also powers GitHub-only read actions added to `code_repository` — `list_branches`, `list_commits` (REST) and `list_projects`, `read_project`, `list_project_items` (Projects v2 GraphQL) — and the `github_projects` polling trigger (§14.3.3); the Projects v2 reads and trigger both require the PAT to carry the `read:project` scope.
 
 **Hub UI:** Hub → Developer Tools → Add Repository Connection → GitHub. The modal asks for:
 

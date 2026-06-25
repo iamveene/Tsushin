@@ -15,14 +15,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/contexts/AuthContext'
-import { api, type EmailTrigger, type GitHubTrigger, type GitHubProjectsTrigger, type GitLabTrigger, type JiraTrigger, type WebhookIntegration } from '@/lib/client'
+import { api, type EmailTrigger, type GitHubTrigger, type GitHubProjectsTrigger, type GitHubCommitsTrigger, type GitLabTrigger, type JiraTrigger, type WebhookIntegration } from '@/lib/client'
 import { formatRelative } from '@/lib/dateUtils'
 import { AlertTriangleIcon, BellIcon, CodeIcon, EnvelopeIcon, GitHubIcon, RefreshIcon, WebhookIcon } from '@/components/ui/icons'
 
-type TriggerKindFilter = '' | 'jira' | 'email' | 'github' | 'gitlab' | 'webhook' | 'github_projects'
+type TriggerKindFilter = '' | 'jira' | 'email' | 'github' | 'gitlab' | 'webhook' | 'github_projects' | 'github_commits'
 
 interface TriggerRow {
-  kind: 'jira' | 'email' | 'github' | 'gitlab' | 'webhook' | 'github_projects'
+  kind: 'jira' | 'email' | 'github' | 'gitlab' | 'webhook' | 'github_projects' | 'github_commits'
   id: number
   name: string
   status: string
@@ -41,6 +41,7 @@ const KIND_LABEL: Record<TriggerRow['kind'], string> = {
   gitlab: 'GitLab',
   webhook: 'Webhook',
   github_projects: 'GitHub Projects',
+  github_commits: 'GitHub Commits',
 }
 
 const KIND_ICON_CLASS: Record<TriggerRow['kind'], string> = {
@@ -50,6 +51,7 @@ const KIND_ICON_CLASS: Record<TriggerRow['kind'], string> = {
   gitlab: 'text-orange-300',
   webhook: 'text-cyan-300',
   github_projects: 'text-fuchsia-300',
+  github_commits: 'text-emerald-300',
 }
 
 function KindIcon({ kind, className }: { kind: TriggerRow['kind']; className?: string }) {
@@ -66,6 +68,8 @@ function KindIcon({ kind, className }: { kind: TriggerRow['kind']; className?: s
     case 'webhook':
       return <WebhookIcon size={16} className={merged} />
     case 'github_projects':
+      return <GitHubIcon size={16} className={merged} />
+    case 'github_commits':
       return <GitHubIcon size={16} className={merged} />
   }
 }
@@ -142,6 +146,21 @@ function githubProjectsToRow(t: GitHubProjectsTrigger): TriggerRow {
   }
 }
 
+function githubCommitsToRow(t: GitHubCommitsTrigger): TriggerRow {
+  return {
+    kind: 'github_commits',
+    id: t.id,
+    name: t.integration_name,
+    status: t.status,
+    health: t.health_status,
+    is_active: t.is_active,
+    default_agent_id: t.default_agent_id ?? null,
+    default_agent_name: t.default_agent_name ?? null,
+    last_activity_at: t.last_activity_at ?? null,
+    href: `/hub/triggers/github_commits/${t.id}`,
+  }
+}
+
 function gitlabToRow(t: GitLabTrigger): TriggerRow {
   return {
     kind: 'gitlab',
@@ -197,13 +216,14 @@ export default function HubTriggersIndexPage() {
           return []
         }
       }
-      const [jira, email, github, gitlab, webhook, githubProjects] = await Promise.all([
+      const [jira, email, github, gitlab, webhook, githubProjects, githubCommits] = await Promise.all([
         listOrFailure('Jira', api.listJiraTriggers()),
         listOrFailure('Email', api.listEmailTriggers()),
         listOrFailure('GitHub', api.listGitHubTriggers()),
         listOrFailure('GitLab', api.listGitLabTriggers()),
         listOrFailure('Webhook', api.listWebhookIntegrations()),
         listOrFailure('GitHub Projects', api.listGitHubProjectsTriggers()),
+        listOrFailure('GitHub Commits', api.listGitHubCommitsTriggers()),
       ])
       if (failures.length) {
         setError(`Could not load ${failures.join(', ')} trigger data. Showing the sources that responded.`)
@@ -217,6 +237,7 @@ export default function HubTriggersIndexPage() {
         ...github.map(githubToRow),
         ...gitlab.map(gitlabToRow),
         ...githubProjects.map(githubProjectsToRow),
+        ...githubCommits.map(githubCommitsToRow),
       ]
       setRows(next)
     } catch (err) {
