@@ -350,6 +350,22 @@ const TRIGGER_PATH_GUIDES: Record<TriggerId, TriggerPathGuide> = {
       'The trigger only wakes agents for selected events and matching MR criteria.',
     ],
   },
+  github_projects: {
+    headline: 'GitHub Projects polling path',
+    summary: 'Use this when a GitHub Projects v2 board should notify WhatsApp on new / assigned / moved cards. GitHub does not emit webhooks for user-owned boards, so Tsushin polls the board over GraphQL and diffs state.',
+    prerequisites: [
+      'A Hub GitHub connection under Developer Tools whose token carries the read:project scope.',
+      'The board owner and number (from the URL …/users/<owner>/projects/<number>), a poll cadence, the delivery agent, and the notify recipient (e.g. @Vini).',
+    ],
+    criteria: [
+      'No filters in this version — every new card, assignment, and column move is notified.',
+      'Use Test connection in the source step to confirm the token can read the board before saving.',
+    ],
+    afterSave: [
+      'Tsushin polls the board on the selected cadence and sends a deterministic templated WhatsApp message (no AI per event).',
+      'The first poll seeds the snapshot silently; later changes fire notifications.',
+    ],
+  },
 }
 
 function defaultEmailCriteriaSource(): CriteriaSourceValues {
