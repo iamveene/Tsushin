@@ -3772,6 +3772,61 @@ class GitHubProjectsChannelInstance(Base):
     )
 
 
+class GitHubCommitsChannelInstance(Base):
+    """Persisted GitHub commit-polling trigger config (REST-polled push events).
+
+    Mirrors :class:`GitHubProjectsChannelInstance` (interval polling + the
+    notification-only auto-flow), but commits on a branch are **linear**, so this
+    needs only a single ``last_seen_sha`` cursor (like ``JiraChannelInstance``) —
+    no per-item snapshot table. GitHub *does* emit ``push`` webhooks, but they
+    can't reach this deployment (the public origin is behind a Cloudflare WAF
+    source-IP allowlist), so polling the REST API outbound is the robust path.
+    Credentials are read from the linked Hub ``GitHubIntegration`` at poll time;
+    no per-trigger PAT is stored here.
+    """
+
+    __tablename__ = "github_commits_channel_instance"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(50), ForeignKey("tenant.id", ondelete="CASCADE"), nullable=False, index=True)
+    integration_name = Column(String(100), nullable=False)
+    github_integration_id = Column(
+        Integer,
+        ForeignKey("github_integration.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    repo_owner = Column(String(100), nullable=False)           # e.g. "iamveene"
+    repo_name = Column(String(100), nullable=False)            # e.g. "asm-platform"
+    branch = Column(String(255), nullable=True)                # branch to watch; NULL = repo default branch
+    last_seen_sha = Column(String(64), nullable=True)          # cursor: newest SHA observed at last poll
+    trigger_criteria = Column(JSON, nullable=True)
+    poll_interval_seconds = Column(Integer, default=300, nullable=False)
+    default_agent_id = Column(Integer, ForeignKey("agent.id", ondelete="SET NULL"), nullable=True, index=True)
+    notify_recipient_raw = Column(String(100), nullable=True)  # e.g. "@Playground" (resolved at send time)
+    notification_enabled = Column(Boolean, default=True, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    status = Column(String(20), default="active", nullable=False)
+    health_status = Column(String(20), default="unknown", nullable=False)
+    health_status_reason = Column(String(500), nullable=True)
+    last_health_check = Column(DateTime, nullable=True)
+    last_activity_at = Column(DateTime, nullable=True)
+    seeded_at = Column(DateTime, nullable=True)                # first successful poll seeded the cursor
+    created_by = Column(Integer, ForeignKey("user.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    github_integration = relationship("GitHubIntegration")
+
+    __table_args__ = (
+        Index("idx_ghc_channel_instance_tenant", "tenant_id"),
+        Index("idx_ghc_channel_instance_status", "status"),
+        Index("idx_ghc_channel_instance_default_agent_id", "default_agent_id"),
+        Index("idx_ghc_channel_instance_github_integration_id", "github_integration_id"),
+        Index("idx_ghc_channel_instance_repo", "tenant_id", "repo_owner", "repo_name"),
+    )
+
+
 class GitHubProjectsItemState(Base):
     """Per-item snapshot for diffing GitHub Projects v2 board state between polls.
 

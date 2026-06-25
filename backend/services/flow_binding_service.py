@@ -46,6 +46,7 @@ _KIND_NAME_FIELDS: dict[str, str] = {
     "email": "integration_name",
     "github": "integration_name",
     "github_projects": "integration_name",
+    "github_commits": "integration_name",
     "gitlab": "integration_name",
     "webhook": "integration_name",
 }
@@ -56,6 +57,7 @@ _KIND_DEFAULT_OBJECTIVE: dict[str, str] = {
     "email": "Process the inbound email and surface the actionable insight.",
     "github": "Process the inbound GitHub event and surface the actionable insight.",
     "github_projects": "Notify on the GitHub Projects board change.",
+    "github_commits": "Notify on new commits.",
     "gitlab": "Process the inbound GitLab event and surface the actionable insight.",
     "webhook": "Process the inbound webhook payload and surface the actionable insight.",
 }
@@ -71,6 +73,7 @@ def _trigger_instance_name(db: Session, *, trigger_kind: str, trigger_instance_i
     from models import (
         EmailChannelInstance,
         GitHubChannelInstance,
+        GitHubCommitsChannelInstance,
         GitHubProjectsChannelInstance,
         GitLabChannelInstance,
         JiraChannelInstance,
@@ -82,6 +85,7 @@ def _trigger_instance_name(db: Session, *, trigger_kind: str, trigger_instance_i
         "email": EmailChannelInstance,
         "github": GitHubChannelInstance,
         "github_projects": GitHubProjectsChannelInstance,
+        "github_commits": GitHubCommitsChannelInstance,
         "gitlab": GitLabChannelInstance,
         "webhook": WebhookIntegration,
     }.get(trigger_kind)
