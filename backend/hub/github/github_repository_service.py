@@ -240,6 +240,7 @@ class GitHubRepositoryService:
         *,
         state: str = "open",
         max_results: int = 20,
+        assignee: Optional[str] = None,
     ) -> list[GitHubIssueSummary]:
         owner = _validate_owner(owner)
         repo = _validate_repo(repo)
@@ -250,7 +251,11 @@ class GitHubRepositoryService:
             )
         per_page = max(1, min(int(max_results), 100))
         url = f"{self._site_url}/repos/{owner}/{repo}/issues"
-        data = await self._get(url, params={"state": state, "per_page": per_page})
+        params: dict[str, Any] = {"state": state, "per_page": per_page}
+        if assignee:
+            # GitHub filters /issues by a single assignee login (or "none"/"*").
+            params["assignee"] = assignee.lstrip("@").strip()
+        data = await self._get(url, params=params)
         if not isinstance(data, list):
             return []
         # GitHub's /issues endpoint returns PRs alongside issues. Filter PRs out

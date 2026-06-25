@@ -383,6 +383,13 @@ class CodeRepositorySkill(BaseSkill):
                 "description": "State filter for 'list_pull_requests' and 'list_issues'.",
                 "default": "open",
             },
+            "assignee": {
+                "type": "string",
+                "description": (
+                    "Optional GitHub username to filter 'list_issues' by assignee "
+                    "(e.g. 'iamveene'). Omit to list issues for all assignees."
+                ),
+            },
             "max_results": {
                 "type": "integer",
                 "description": (
@@ -765,22 +772,25 @@ class CodeRepositorySkill(BaseSkill):
             )
         state = (arguments.get("state") or "open").strip().lower()
         max_results = int(arguments.get("max_results") or 20)
+        assignee = (arguments.get("assignee") or "").strip() or None
         issues = await repo_service.list_issues(
-            owner, repo, state=state, max_results=max_results
+            owner, repo, state=state, max_results=max_results, assignee=assignee
         )
+        scope = f" assigned to {assignee}" if assignee else ""
         if not issues:
             return SkillResult(
                 success=True,
-                output=f"No {state} issues in {owner}/{repo}.",
+                output=f"No {state} issues in {owner}/{repo}{scope}.",
                 metadata={
                     "action": "list_issues",
                     "count": 0,
                     "owner": owner,
                     "repo": repo,
                     "state": state,
+                    "assignee": assignee,
                 },
             )
-        lines = [f"Found {len(issues)} {state} issue(s) in `{owner}/{repo}`:\n"]
+        lines = [f"Found {len(issues)} {state} issue(s) in `{owner}/{repo}`{scope}:\n"]
         for i, issue in enumerate(issues, 1):
             head = f"{i}. **#{issue.number}** [{issue.state}] — {issue.title}"
             lines.append(head)
@@ -789,6 +799,13 @@ class CodeRepositorySkill(BaseSkill):
                 sub.append(f"by {issue.author}")
             if issue.labels:
                 sub.append(f"labels: {', '.join(issue.labels)}")
+            _assignees = [
+                a.get("login")
+                for a in ((getattr(issue, "raw", None) or {}).get("assignees") or [])
+                if isinstance(a, dict) and a.get("login")
+            ]
+            if _assignees:
+                sub.append(f"assigned: {', '.join(_assignees)}")
             if sub:
                 lines.append(f"   {'    '.join(sub)}")
             if issue.url:
