@@ -8,7 +8,7 @@ For scheduled messages and tool execution, use the Flows feature.
 
 Enhanced with:
 - Portuguese natural language date parsing (dateparser)
-- GMT-3 timezone handling (Brazil/São Paulo timezone)
+- Per-agent IANA timezone handling
 - Robust date/time extraction
 - Contact resolution for @mentions and names
 """
@@ -20,13 +20,15 @@ import re
 import json
 import logging
 import dateparser
-import pytz
+from utils.agent_timezone import (
+    localize_wall_time,
+    resolve_timezone,
+    resolve_timezone_name,
+    to_utc_naive,
+    utc_to_local,
+)
 
 logger = logging.getLogger(__name__)
-
-# Brazil timezone (GMT-3)
-BRAZIL_TZ = pytz.timezone('America/Sao_Paulo')
-
 
 class SchedulerSkill(BaseSkill):
     """
@@ -41,6 +43,14 @@ class SchedulerSkill(BaseSkill):
     skill_name = "Scheduler"
     skill_description = "Schedule reminders and AI-driven conversations via natural language"
     execution_mode = "tool"
+
+    @staticmethod
+    def _timezone_name(config: Optional[Dict[str, Any]] = None) -> str:
+        return resolve_timezone_name((config or {}).get("timezone"))
+
+    @classmethod
+    def _timezone(cls, config: Optional[Dict[str, Any]] = None):
+        return resolve_timezone(cls._timezone_name(config))
 
     def _resolve_tenant_id(self) -> Optional[str]:
         """Resolve tenant_id from agent context for API key lookups."""
@@ -313,7 +323,7 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
                 )
 
                 # Format confirmation message using the skill's _format_confirmation method
-                confirmation = self._format_confirmation(event, parsed)
+                confirmation = self._format_confirmation(event, parsed, config)
 
                 return SkillResult(
                     success=True,
@@ -346,16 +356,25 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
         from db import get_engine
         from models import ScheduledEvent
         import settings
-        import pytz
 
         engine = get_engine(settings.DATABASE_URL)
         SessionLocal = sessionmaker(bind=engine)
         db = SessionLocal()
 
         try:
+            tenant_id = config.get('tenant_id')
+            if not tenant_id:
+                logger.error("Scheduler list refused without tenant context")
+                return SkillResult(
+                    success=False,
+                    output="❌ Unable to list reminders without tenant context.",
+                    metadata={'error': 'missing_tenant_context', 'skip_ai': True},
+                )
+
             # Get all PENDING/ACTIVE events
             events = db.query(ScheduledEvent).filter(
-                ScheduledEvent.status.in_(['PENDING', 'ACTIVE'])
+                ScheduledEvent.tenant_id == tenant_id,
+                ScheduledEvent.status.in_(['PENDING', 'ACTIVE']),
             ).order_by(ScheduledEvent.scheduled_at.asc()).limit(20).all()
 
             if not events:
@@ -366,17 +385,15 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
                     metadata={'skip_ai': True, 'event_count': 0}
                 )
 
-            # Format list with Brazil timezone
+            timezone_name = self._timezone_name(config)
             logger.info(f"Found {len(events)} scheduled events")
             lines = [f"Você tem {len(events)} lembrete(s) agendado(s):\n"]
 
             for event in events:
                 payload = json.loads(event.payload) if isinstance(event.payload, str) else event.payload
 
-                # Convert UTC to Brazil time
-                utc_time = event.scheduled_at.replace(tzinfo=pytz.UTC)
-                brazil_time = utc_time.astimezone(BRAZIL_TZ)
-                time_str = brazil_time.strftime('%d/%m às %H:%M')
+                local_time = utc_to_local(event.scheduled_at, timezone_name)
+                time_str = local_time.strftime('%d/%m às %H:%M')
 
                 # Format based on event type
                 if event.event_type == 'NOTIFICATION':
@@ -419,7 +436,11 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
         finally:
             db.close()
 
-    def _parse_natural_language_datetime(self, text: str) -> Optional[datetime]:
+    def _parse_natural_language_datetime(
+        self,
+        text: str,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> Optional[datetime]:
         """
         Parse natural language date/time using dateparser with Portuguese support.
 
@@ -431,11 +452,12 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
         - "em 1 minuto" → 1 minute from now
         - "em 5 minutos" → 5 minutes from now
 
-        Returns datetime in UTC (converts from GMT-3).
+        Returns a naive UTC datetime for scheduler storage.
         """
         try:
-            # Get current time in Brazil timezone
-            now_brazil = datetime.now(BRAZIL_TZ)
+            timezone_name = self._timezone_name(config)
+            agent_tz = self._timezone(config)
+            now_local = datetime.now(agent_tz)
 
             # Pre-process common Portuguese patterns that dateparser might miss
             # Pattern: "em X minuto(s)" or "em X segundo(s)" or "em X hora(s)"
@@ -445,16 +467,16 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
                 unit = relative_match.group(2)
 
                 if unit == 'minuto':
-                    parsed = now_brazil + timedelta(minutes=amount)
+                    parsed = now_local + timedelta(minutes=amount)
                 elif unit == 'segundo':
-                    parsed = now_brazil + timedelta(seconds=amount)
+                    parsed = now_local + timedelta(seconds=amount)
                 elif unit == 'hora':
-                    parsed = now_brazil + timedelta(hours=amount)
+                    parsed = now_local + timedelta(hours=amount)
                 elif unit == 'dia':
-                    parsed = now_brazil + timedelta(days=amount)
+                    parsed = now_local + timedelta(days=amount)
 
-                utc_time = parsed.astimezone(pytz.UTC).replace(tzinfo=None)
-                logger.info(f"Parsed Portuguese relative time '{text}' → Brazil: {parsed.strftime('%Y-%m-%d %H:%M %Z')} → UTC: {utc_time}")
+                utc_time = to_utc_naive(parsed, timezone_name)
+                logger.info(f"Parsed Portuguese relative time '{text}' → {timezone_name}: {parsed.strftime('%Y-%m-%d %H:%M %Z')} → UTC: {utc_time}")
                 return utc_time
 
             # Pre-process Portuguese date/time formats that dateparser struggles with
@@ -494,21 +516,26 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
             if dia_pattern:
                 day = int(dia_pattern.group(1))
                 month = int(dia_pattern.group(2))
-                year = int(dia_pattern.group(3)) if dia_pattern.group(3) else now_brazil.year
+                year = int(dia_pattern.group(3)) if dia_pattern.group(3) else now_local.year
                 hour = int(dia_pattern.group(4))
                 minute = int(dia_pattern.group(5)) if dia_pattern.group(5) else 0
 
-                # Create datetime in Brazil timezone (DD/MM/YYYY format)
                 try:
-                    target_time = now_brazil.replace(year=year, month=month, day=day, hour=hour, minute=minute, second=0, microsecond=0)
+                    target_time = localize_wall_time(
+                        datetime(year, month, day, hour, minute),
+                        timezone_name,
+                    )
 
                     # If the date is in the past and no year was specified, try next year
-                    if not dia_pattern.group(3) and target_time <= now_brazil:
-                        target_time = target_time.replace(year=now_brazil.year + 1)
+                    if not dia_pattern.group(3) and target_time <= now_local:
+                        target_time = localize_wall_time(
+                            datetime(now_local.year + 1, month, day, hour, minute),
+                            timezone_name,
+                        )
 
                     # Convert to UTC
-                    utc_time = target_time.astimezone(pytz.UTC).replace(tzinfo=None)
-                    logger.info(f"Parsed 'dia' format: '{text}' → Brazil: {target_time.strftime('%Y-%m-%d %H:%M %Z')} → UTC: {utc_time}")
+                    utc_time = to_utc_naive(target_time, timezone_name)
+                    logger.info(f"Parsed 'dia' format: '{text}' → {timezone_name}: {target_time.strftime('%Y-%m-%d %H:%M %Z')} → UTC: {utc_time}")
                     return utc_time
                 except ValueError as e:
                     logger.warning(f"Invalid date components in 'dia' pattern: day={day}, month={month}, year={year}, error={e}")
@@ -534,14 +561,21 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
             if time_only_match and not re.search(r'\d{1,2}/\d{1,2}', processed_text) and not has_weekday:
                 hour = int(time_only_match.group(1))
                 minute = int(time_only_match.group(2))
-                target_time = now_brazil.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                target_time = localize_wall_time(
+                    datetime(now_local.year, now_local.month, now_local.day, hour, minute),
+                    timezone_name,
+                )
 
                 # If time is in the past today, use tomorrow
-                if target_time <= now_brazil:
-                    target_time = target_time + timedelta(days=1)
+                if target_time <= now_local:
+                    next_day = target_time.date() + timedelta(days=1)
+                    target_time = localize_wall_time(
+                        datetime.combine(next_day, target_time.time().replace(tzinfo=None)),
+                        timezone_name,
+                    )
 
-                utc_time = target_time.astimezone(pytz.UTC).replace(tzinfo=None)
-                logger.info(f"Parsed time-only '{text}' → Brazil: {target_time.strftime('%Y-%m-%d %H:%M %Z')} → UTC: {utc_time}")
+                utc_time = to_utc_naive(target_time, timezone_name)
+                logger.info(f"Parsed time-only '{text}' → {timezone_name}: {target_time.strftime('%Y-%m-%d %H:%M %Z')} → UTC: {utc_time}")
                 return utc_time
 
             # Pattern: "às HH:MM da próxima X-feira" → Manual parsing for weekdays
@@ -566,16 +600,19 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
 
                 if target_weekday is not None:
                     # Calculate next occurrence of this weekday
-                    current_weekday = now_brazil.weekday()
+                    current_weekday = now_local.weekday()
                     days_ahead = target_weekday - current_weekday
                     if days_ahead <= 0:  # Target day already passed this week
                         days_ahead += 7
 
-                    target_date = now_brazil + timedelta(days=days_ahead)
-                    target_time = target_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                    target_date = now_local.date() + timedelta(days=days_ahead)
+                    target_time = localize_wall_time(
+                        datetime.combine(target_date, datetime.min.time()).replace(hour=hour, minute=minute),
+                        timezone_name,
+                    )
 
-                    utc_time = target_time.astimezone(pytz.UTC).replace(tzinfo=None)
-                    logger.info(f"Parsed weekday+time '{text}' → Brazil: {target_time.strftime('%Y-%m-%d %H:%M %Z')} → UTC: {utc_time}")
+                    utc_time = to_utc_naive(target_time, timezone_name)
+                    logger.info(f"Parsed weekday+time '{text}' → {timezone_name}: {target_time.strftime('%Y-%m-%d %H:%M %Z')} → UTC: {utc_time}")
                     return utc_time
 
             # Pattern: "DD/MM/YYYY às HH:MM" or "DD/MM/YYYY as HH:MM"
@@ -609,10 +646,10 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
                 processed_text,
                 languages=['pt', 'en'],
                 settings={
-                    'TIMEZONE': 'America/Sao_Paulo',
+                    'TIMEZONE': timezone_name,
                     'RETURN_AS_TIMEZONE_AWARE': True,
                     'PREFER_DATES_FROM': 'future',
-                    'RELATIVE_BASE': now_brazil,
+                    'RELATIVE_BASE': now_local,
                     'PREFER_DAY_OF_MONTH': 'first',
                     'STRICT_PARSING': False
                 }
@@ -620,7 +657,7 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
 
             if parsed:
                 # Ensure it's in the future
-                if parsed <= now_brazil:
+                if parsed <= now_local:
                     # If parsed date is in the past, try adding appropriate time
                     # (e.g., if user says "segunda-feira 9h30" and it's already Monday, use next Monday)
                     if 'semana' not in text.lower() and 'week' not in text.lower():
@@ -628,8 +665,8 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
                         parsed = parsed + timedelta(days=7)
 
                 # Convert to UTC for storage
-                utc_time = parsed.astimezone(pytz.UTC).replace(tzinfo=None)
-                logger.info(f"Parsed '{text}' → Brazil: {parsed.strftime('%Y-%m-%d %H:%M %Z')} → UTC: {utc_time}")
+                utc_time = to_utc_naive(parsed, timezone_name)
+                logger.info(f"Parsed '{text}' → {timezone_name}: {parsed.strftime('%Y-%m-%d %H:%M %Z')} → UTC: {utc_time}")
                 return utc_time
 
             return None
@@ -675,17 +712,17 @@ Respond ONLY with: CREATE or LIST (no explanation, no punctuation)"""
             # Create AI client
             ai_client = AIClient(provider=provider, model_name=model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
 
-            # Get current time in Brazil timezone for context
-            now_brazil = datetime.now(BRAZIL_TZ)
-            now_str = now_brazil.strftime('%Y-%m-%d %H:%M')
+            timezone_name = self._timezone_name(config)
+            now_local = datetime.now(self._timezone(config))
+            now_str = now_local.strftime('%Y-%m-%d %H:%M')
 
             # Prompt for AI date parsing
             prompt = f"""Parse the date and time from this text and convert it to a specific datetime.
 
 Text: "{text}"
 
-Current datetime (Brazil GMT-3): {now_str}
-Current day: {now_brazil.strftime('%A')} ({now_brazil.strftime('%d/%m/%Y')})
+Current datetime ({timezone_name}): {now_str}
+Current day: {now_local.strftime('%A')} ({now_local.strftime('%d/%m/%Y')})
 
 Extract the date and time mentioned in the text. Consider:
 - Portuguese date formats: "dia 17/12" means December 17th, "dia 17/12/2026" includes the year
@@ -695,9 +732,9 @@ Extract the date and time mentioned in the text. Consider:
 
 Respond with ONLY a JSON object (no markdown, no explanation):
 {{
-  "year": {now_brazil.year},
-  "month": {now_brazil.month},
-  "day": {now_brazil.day},
+  "year": {now_local.year},
+  "month": {now_local.month},
+  "day": {now_local.day},
   "hour": 8,
   "minute": 0
 }}
@@ -728,18 +765,19 @@ If you cannot determine the date/time, respond with: {{"error": "cannot parse"}}
                 return None
 
             # Extract components
-            year = int(parsed_data.get('year', now_brazil.year))
+            year = int(parsed_data.get('year', now_local.year))
             month = int(parsed_data.get('month', 1))
             day = int(parsed_data.get('day', 1))
             hour = int(parsed_data.get('hour', 0))
             minute = int(parsed_data.get('minute', 0))
 
-            # Create datetime in Brazil timezone
-            target_time = now_brazil.replace(year=year, month=month, day=day, hour=hour, minute=minute, second=0, microsecond=0)
+            target_time = localize_wall_time(
+                datetime(year, month, day, hour, minute),
+                timezone_name,
+            )
 
-            # Convert to UTC
-            utc_time = target_time.astimezone(pytz.UTC).replace(tzinfo=None)
-            logger.info(f"AI parsed '{text}' → Brazil: {target_time.strftime('%Y-%m-%d %H:%M %Z')} → UTC: {utc_time}")
+            utc_time = to_utc_naive(target_time, timezone_name)
+            logger.info(f"AI parsed '{text}' → {timezone_name}: {target_time.strftime('%Y-%m-%d %H:%M %Z')} → UTC: {utc_time}")
             return utc_time
 
         except Exception as e:
@@ -797,17 +835,17 @@ If you cannot determine the date/time, respond with: {{"error": "cannot parse"}}
             # Create AI client (Phase 7.4: Pass db for API key loading)
             ai_client = AIClient(provider=provider, model_name=model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
 
-            # Get current time in Brazil timezone for context
-            now_brazil = datetime.now(BRAZIL_TZ)
-            now_str = now_brazil.strftime('%Y-%m-%d %H:%M')
+            timezone_name = self._timezone_name(config)
+            now_local = datetime.now(self._timezone(config))
+            now_str = now_local.strftime('%Y-%m-%d %H:%M')
 
             # Prompt for parsing
             prompt = f"""Parse this Portuguese/English scheduling request and extract structured data.
 
 Request: "{text}"
 
-Current time (Brazil GMT-3): {now_str}
-Current day: {now_brazil.strftime('%A')} ({now_brazil.strftime('%d/%m/%Y')})
+Current time ({timezone_name}): {now_str}
+Current day: {now_local.strftime('%A')} ({now_local.strftime('%d/%m/%Y')})
 
 Extract these fields:
 
@@ -900,24 +938,25 @@ Respond ONLY with valid JSON (no markdown, no explanation):
             # Parse time expression using dateparser
             scheduled_at = None
             if time_expression:
-                scheduled_at = self._parse_natural_language_datetime(time_expression)
+                scheduled_at = self._parse_natural_language_datetime(time_expression, config)
 
             # Fallback if parsing failed
             if not scheduled_at:
                 # Try parsing the entire text
-                scheduled_at = self._parse_natural_language_datetime(text)
+                scheduled_at = self._parse_natural_language_datetime(text, config)
 
             # AI Fallback: Use AI to parse the date if traditional parsing failed
             if not scheduled_at:
                 logger.warning(f"Traditional parsing failed for '{time_expression}' or '{text}', trying AI fallback...")
                 scheduled_at = await self._ai_parse_datetime(text, config)
 
-            # Final fallback: 1 hour from now (in Brazil timezone, then convert to UTC)
+            # Final fallback: one hour from the current instant.
             if not scheduled_at:
-                now_brazil = datetime.now(BRAZIL_TZ)
-                fallback_brazil = now_brazil + timedelta(hours=1)
-                scheduled_at = fallback_brazil.astimezone(pytz.UTC).replace(tzinfo=None)
-                logger.warning(f"Could not parse time from '{time_expression}' or '{text}', using 1 hour from now (Brazil time)")
+                scheduled_at = to_utc_naive(now_local + timedelta(hours=1), timezone_name)
+                logger.warning(
+                    f"Could not parse time from '{time_expression}' or '{text}', "
+                    f"using 1 hour from now in {timezone_name}"
+                )
 
             # Extract duration
             duration_minutes = parsed_data.get('duration_minutes')
@@ -981,14 +1020,18 @@ Respond ONLY with valid JSON (no markdown, no explanation):
                 'error': f"I couldn't understand the scheduling request. Please be more specific about what, when, and who."
             }
 
-    def _format_confirmation(self, event, parsed: Dict[str, Any]) -> str:
-        """Format confirmation message with Brazil timezone display"""
+    def _format_confirmation(
+        self,
+        event,
+        parsed: Dict[str, Any],
+        config: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Format confirmation in the agent's timezone."""
         event_type_name = event.event_type.lower()
 
-        # Convert UTC scheduled_at to Brazil timezone for display
-        utc_time = event.scheduled_at.replace(tzinfo=pytz.UTC)
-        brazil_time = utc_time.astimezone(BRAZIL_TZ)
-        scheduled_time = brazil_time.strftime('%d/%m/%Y às %H:%M GMT-3')
+        timezone_name = self._timezone_name(config)
+        local_time = utc_to_local(event.scheduled_at, timezone_name)
+        scheduled_time = local_time.strftime('%d/%m/%Y às %H:%M %Z')
 
         payload = parsed['payload']
 
@@ -1154,7 +1197,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
             )
 
             # Query events
-            now = datetime.now(BRAZIL_TZ)
+            now = datetime.now(self._timezone(config))
             end_date = now + timedelta(days=days_ahead)
 
             events = await provider.list_events(
@@ -1228,7 +1271,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
             )
 
         # Parse time expression using existing logic
-        scheduled_at = self._parse_natural_language_datetime(time_expr)
+        scheduled_at = self._parse_natural_language_datetime(time_expr, config)
 
         if not scheduled_at:
             # Try AI parsing as fallback
@@ -1271,11 +1314,16 @@ Respond ONLY with valid JSON (no markdown, no explanation):
                 recurrence=recurrence_rule,
                 event_type=event_type,  # Flows-specific: NOTIFICATION or CONVERSATION
                 recipient=recipient,    # Flows-specific: who receives the reminder
-                agent_id=agent_id       # Flows-specific: agent context
+                agent_id=agent_id,      # Flows-specific: agent context
+                timezone=self._timezone_name(config),
+                start_is_utc=True,
             )
 
             # Format response
-            time_str = scheduled_at.strftime("%Y-%m-%d %H:%M")
+            time_str = utc_to_local(
+                scheduled_at,
+                self._timezone_name(config),
+            ).strftime("%Y-%m-%d %H:%M %Z")
             recurrence_str = f" (repeating {recurrence})" if recurrence != "none" else ""
             provider_name = provider.provider_name
 

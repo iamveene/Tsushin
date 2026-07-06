@@ -46,6 +46,7 @@ from services.agent_run_status import determine_agent_run_status
 # Shared utilities
 from agent.utils import summarize_tool_result
 from agent.memory.tool_output_buffer import get_tool_output_buffer
+from constants.agent_config import DEFAULT_AGENT_TIMEZONE
 
 
 def _determine_agent_run_status(result: Dict) -> str:
@@ -557,6 +558,11 @@ class AgentRouter:
         resolved_config["system_prompt"] = agent.system_prompt
         # Note: enabled_tools deprecated - using Skills system
         resolved_config["keywords"] = agent.keywords or []
+
+        # Agent-local time is authoritative over any process-level config.
+        resolved_config["timezone"] = (
+            getattr(agent, "timezone", None) or DEFAULT_AGENT_TIMEZONE
+        )
 
         return resolved_config
 
@@ -1506,6 +1512,7 @@ class AgentRouter:
             "max_agentic_loop_bytes": getattr(agent, "max_agentic_loop_bytes", None),
             "platform_min_agentic_rounds": self.config.get("platform_min_agentic_rounds"),
             "platform_max_agentic_rounds": self.config.get("platform_max_agentic_rounds"),
+            "timezone": getattr(agent, "timezone", None) or DEFAULT_AGENT_TIMEZONE,
         }
 
     def _build_persona_context(self, persona) -> str:

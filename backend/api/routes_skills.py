@@ -590,7 +590,8 @@ async def test_skill(
         skill_class = skill_manager.registry[skill_type]
         skill_instance = skill_manager._create_skill_instance(skill_class, db, agent_id)
 
-        # Apply saved config, db session, and agent context (mirrors process_message_with_skills)
+        # Apply saved config plus authoritative agent context (mirrors normal execution).
+        config = skill_manager.build_runtime_config(db, agent_id, config)
         skill_instance._config = config
         if hasattr(skill_instance, 'set_db_session'):
             skill_instance.set_db_session(db)
@@ -605,14 +606,6 @@ async def test_skill(
                 "message": f"Skill '{skill_type}' cannot handle this message type",
                 "can_handle": False
             }
-
-        # Inject agent_id and tenant_id into config for process() (mirrors process_message_with_skills)
-        config['agent_id'] = agent_id
-        if 'tenant_id' not in config:
-            from models import Agent as AgentModel
-            agent_obj = db.query(AgentModel).filter(AgentModel.id == agent_id).first()
-            if agent_obj:
-                config['tenant_id'] = agent_obj.tenant_id
 
         # Execute skill
         result = await skill_instance.process(test_message, config)

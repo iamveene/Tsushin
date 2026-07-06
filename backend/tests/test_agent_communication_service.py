@@ -106,7 +106,14 @@ def stub_default_skill_config():
         yield
 
 
-def _create_agent(db_session, *, tenant_id: str, name: str, provider_instance_id=None) -> Agent:
+def _create_agent(
+    db_session,
+    *,
+    tenant_id: str,
+    name: str,
+    provider_instance_id=None,
+    timezone=None,
+) -> Agent:
     contact = Contact(
         friendly_name=name,
         role="agent",
@@ -124,6 +131,7 @@ def _create_agent(db_session, *, tenant_id: str, name: str, provider_instance_id
         model_name="gpt-4o-mini",
         is_active=True,
         provider_instance_id=provider_instance_id,
+        timezone=timezone,
     )
     db_session.add(agent)
     db_session.commit()
@@ -305,6 +313,7 @@ def test_invoke_target_agent_preserves_provider_instance_id(db_session):
         tenant_id=tenant_id,
         name="Receiver",
         provider_instance_id=42,
+        timezone="Asia/Tokyo",
     )
     service = AgentCommunicationService(db_session, tenant_id)
     captured = {}
@@ -350,6 +359,7 @@ def test_invoke_target_agent_preserves_provider_instance_id(db_session):
         ))
 
     assert captured["agent_config"]["provider_instance_id"] == 42
+    assert captured["agent_config"]["timezone"] == "Asia/Tokyo"
     assert captured["process_kwargs"]["original_query"] == "delegate this"
     assert result["answer"] == "delegated"
 

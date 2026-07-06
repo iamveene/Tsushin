@@ -1889,13 +1889,16 @@ Type `/help all` to see syntax for all commands.
         skill_instance._agent_id = agent_id
 
         agent = self.db.query(Agent).filter(Agent.id == agent_id).first()
-        config = {
+        skill_config = {
             **skill_class.get_default_config(),
             **(skill_record.config or {}),
-            "agent_id": agent_id,
-            "tenant_id": tenant_id or (agent.tenant_id if agent else None),
-            "db": self.db,
         }
+        config = manager.build_runtime_config(
+            self.db,
+            agent_id,
+            skill_config,
+            agent_obj=agent,
+        )
         skill_instance._config = config
 
         message = InboundMessage(

@@ -8,6 +8,19 @@ import {
   SettingsIcon, ClipboardIcon, SparklesIcon, ScaleIcon, DatabaseIcon
 } from '@/components/ui/icons'
 
+// IANA timezones offered for per-agent localization. Mirrors the Google Calendar
+// setup wizard's list; 'America/Sao_Paulo' is the platform default.
+const TIMEZONES = [
+  'America/Sao_Paulo',
+  'America/New_York',
+  'America/Chicago',
+  'America/Los_Angeles',
+  'Europe/London',
+  'Europe/Lisbon',
+  'Europe/Madrid',
+  'UTC',
+]
+
 interface Props {
   agentId: number
 }
@@ -30,6 +43,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
   const [providerInstanceId, setProviderInstanceId] = useState<number | null>(null)
   const [isActive, setIsActive] = useState(true)
   const [isDefault, setIsDefault] = useState(false)
+  const [timezone, setTimezone] = useState<string | null>(null)
 
   // Vector Store (per-agent override)
   const [vectorStoreInstanceId, setVectorStoreInstanceId] = useState<number | null>(null)
@@ -41,6 +55,9 @@ export default function AgentConfigurationManager({ agentId }: Props) {
   const [triggerDmEnabled, setTriggerDmEnabled] = useState<boolean | null>(null)
   const [triggerGroupFilters, setTriggerGroupFilters] = useState<string[]>([])
   const [triggerNumberFilters, setTriggerNumberFilters] = useState<string[]>([])
+  const timezoneOptions = timezone && !TIMEZONES.includes(timezone)
+    ? [timezone, ...TIMEZONES]
+    : TIMEZONES
 
   // Input helpers for triggers
   const [groupFilterInput, setGroupFilterInput] = useState('')
@@ -80,6 +97,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
       setProviderInstanceId(agentData.provider_instance_id || null)
       setIsActive(agentData.is_active)
       setIsDefault(agentData.is_default)
+      setTimezone(agentData.timezone ?? null)
 
       // Vector store configuration
       setVectorStoreInstances(vectorStoresData)
@@ -119,6 +137,7 @@ export default function AgentConfigurationManager({ agentId }: Props) {
         provider_instance_id: providerInstanceId,
         is_active: isActive,
         is_default: isDefault,
+        timezone: timezone || null,
 
         // Vector store (per-agent override)
         vector_store_instance_id: vectorStoreInstanceId,
@@ -311,6 +330,26 @@ export default function AgentConfigurationManager({ agentId }: Props) {
             setModelName(next.model_name)
           }}
         />
+      </div>
+
+      {/* Timezone / Localization */}
+      <div className="bg-tsushin-surface border border-tsushin-border rounded-lg p-6">
+        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2"><SettingsIcon size={20} /> Timezone</h3>
+        <p className="text-sm text-tsushin-slate mb-3">
+          The agent computes &quot;now&quot; and relative reminders (e.g. &quot;in 15 minutes&quot;) in this timezone.
+          Leave as the default unless this agent serves users in another zone.
+        </p>
+        <select
+          value={timezone || 'America/Sao_Paulo'}
+          onChange={(e) => setTimezone(e.target.value)}
+          className="w-full px-3 py-2 border border-tsushin-border rounded-md text-white bg-tsushin-surface"
+        >
+          {timezoneOptions.map((tz) => (
+            <option key={tz} value={tz}>
+              {tz.replace('_', ' ')}{tz === 'America/Sao_Paulo' ? ' (default)' : ''}
+            </option>
+          ))}
+        </select>
       </div>
 
       {/* Vector Store */}
