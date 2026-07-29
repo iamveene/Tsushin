@@ -14,6 +14,7 @@ Voice notes and all other inbound WhatsApp messages stopped reaching Tsushin aft
 - Upgraded `go.mau.fi/whatsmeow` in both the tenant WhatsApp MCP and QA tester bridge from the 2026-03-27 revision to `v0.0.0-20260722203353-e9a033b24933` (2026-07-22). This includes the upstream fix that propagates `store.SetWAVersion()` into the login payload's advertised app version, not only the stored version value.
 - Updated both bridge builders to Go 1.26 and refreshed their transitive module locks.
 - Added a regression contract test to both Go modules proving that a runtime WhatsApp Web version update also changes `BaseClientPayload.UserAgent.AppVersion`.
+- Fixed the follow-on media regression exposed by that upgrade: current `whatsmeow` downloads through `GetDirectPath()` instead of the stored absolute URL. Both bridges now preserve WhatsApp's signed `ccb`/`oh`/`oe` query when deriving the direct path; stripping it produced CDN `403` responses and left fresh audio without a file for transcription. Regression tests cover absolute media URLs, already-normalized direct paths, and byte-preservation of percent-encoded signature values.
 - Deployment note: rebuilding `tsushin/whatsapp-mcp:latest` does not change an already-created container's immutable image. Existing affected instances must be recreated through `MCPContainerManager` while preserving their `/app/store` session bind mount; a normal restart is insufficient and `/logout` must not be used.
 
 ### Added — GitHub commits → WhatsApp polling trigger (2026-06-25)

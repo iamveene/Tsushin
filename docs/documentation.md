@@ -729,6 +729,8 @@ Use `scripts/deploy-prod.sh` for the production host. The script refuses non-`ma
 
 When the WhatsApp MCP helper image changes, remember that existing runtime-created containers keep their original immutable image. Rebuilding the `:latest` tag alone—and stopping/starting or restarting an existing instance—does not upgrade that container. Recreate affected instances serially through `MCPContainerManager.start_instance()` after removing only the stopped container, while preserving the instance row and its `/app/store` bind mount. Verify the mount and back it up first. Never use `/logout`, instance deletion, `docker rm -v`, or `docker compose down` for this rollout because those paths can discard the paired WhatsApp session or disrupt unrelated tenants.
 
+For audio or other media failures, distinguish ingestion from download. A message row with `media_type`, `url`, `media_key`, both SHA-256 values, and `file_length` proves the bridge received the attachment, but transcription still requires `POST /api/download` to return the decrypted bytes. Current `whatsmeow` builds download through `GetDirectPath()` and append their own hash/MMS parameters; the derived direct path must retain WhatsApp's signed URL query (`ccb`, `oh`, `oe`, and any future fields). A bridge log showing `download failed with status code 403` while those database fields are populated points to a malformed/expired signed direct path, not an ASR-provider failure.
+
 ```bash
 cd /Users/vinicios/code/tsushin
 scripts/deploy-prod.sh

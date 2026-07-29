@@ -11,6 +11,7 @@ import (
 	"math"
 	"math/rand"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -1185,24 +1186,23 @@ func downloadMedia(client *whatsmeow.Client, messageStore *MessageStore, message
 	return true, mediaType, filename, absPath, nil
 }
 
-// Extract direct path from a WhatsApp media URL
-func extractDirectPathFromURL(url string) string {
-	// The direct path is typically in the URL, we need to extract it
-	// Example URL: https://mmg.whatsapp.net/v/t62.7118-24/13812002_698058036224062_3424455886509161511_n.enc?ccb=11-4&oh=...
-
-	// Find the path part after the domain
-	parts := strings.SplitN(url, ".net/", 2)
-	if len(parts) < 2 {
-		return url // Return original URL if parsing fails
+// Extract the signed direct path from a WhatsApp media URL.
+//
+// Current whatsmeow versions download media exclusively through GetDirectPath
+// and append their own hash/mms-type parameters with "&". The signed WhatsApp
+// query (ccb/oh/oe) must therefore remain attached to the path; stripping it
+// produces a malformed CDN request and a 403 response.
+func extractDirectPathFromURL(rawURL string) string {
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil || parsed.Path == "" {
+		return rawURL
 	}
 
-	pathPart := parts[1]
-
-	// Remove query parameters
-	pathPart = strings.SplitN(pathPart, "?", 2)[0]
-
-	// Create proper direct path format
-	return "/" + pathPart
+	directPath := parsed.EscapedPath()
+	if parsed.RawQuery != "" {
+		directPath += "?" + parsed.RawQuery
+	}
+	return directPath
 }
 
 // authMiddleware provides token-based authentication for MCP API endpoints
