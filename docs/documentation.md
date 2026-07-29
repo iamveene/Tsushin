@@ -727,6 +727,8 @@ Production deploys follow the release gate below:
 
 Use `scripts/deploy-prod.sh` for the production host. The script refuses non-`main` deploys by default, SSHes to the production checkout, runs `git pull --ff-only`, ensures the WhatsApp MCP helper image from `TSN_WHATSAPP_MCP_IMAGE` exists or rebuilds it from `backend/whatsapp-mcp`, rebuilds changed services with Docker Compose without calling `docker-compose down`, verifies container health, and checks the public Cloudflare URL.
 
+When the WhatsApp MCP helper image changes, remember that existing runtime-created containers keep their original immutable image. Rebuilding the `:latest` tag alone—and stopping/starting or restarting an existing instance—does not upgrade that container. Recreate affected instances serially through `MCPContainerManager.start_instance()` after removing only the stopped container, while preserving the instance row and its `/app/store` bind mount. Verify the mount and back it up first. Never use `/logout`, instance deletion, `docker rm -v`, or `docker compose down` for this rollout because those paths can discard the paired WhatsApp session or disrupt unrelated tenants.
+
 ```bash
 cd /Users/vinicios/code/tsushin
 scripts/deploy-prod.sh
@@ -5031,6 +5033,16 @@ docker restart mcp-agent-tenant_<id>    # Restart container
 ```
 
 Prevention: never `docker compose down` for routine rebuilds — use `docker compose build --no-cache <service>` followed by `docker compose up -d <service>` instead. The compose file declares `tsushin-network` as `external: true`, so the network survives, but the compose services still restart if you tear them down.
+
+If logs show `ClientOutdated (405)` even after `Updated WhatsApp Web client version ...`, the failure is not an ASR issue and a plain restart cannot repair it. Upgrade the pinned `go.mau.fi/whatsmeow` revision, rebuild the helper image, then recreate only the affected MCP container so it adopts that image:
+
+1. Stop the instance through the authenticated Hub/API lifecycle endpoint.
+2. Inspect the exact container and confirm its host session directory is bind-mounted at `/app/store`; back up that directory, including SQLite WAL/SHM files.
+3. Remove the stopped container without `-v`. Do not delete the instance row or session directory.
+4. Start the instance through the supported API/manager path. `MCPContainerManager.start_instance()` detects the missing container and recreates it with the same session path, port, phone number, and API secret.
+5. Confirm the recreated container image ID matches the newly built helper image, `/api/health` reports both `connected=true` and `authenticated=true`, and the 405/reconnect loop is gone.
+
+Messages sent while the bridge was unauthenticated may not be replayed and should be resent for verification.
 
 ### 28.3 Database issues
 
