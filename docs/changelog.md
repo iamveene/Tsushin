@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — WhatsApp 405 `Client outdated` ingestion outage (2026-07-29)
+
+Voice notes and all other inbound WhatsApp messages stopped reaching Tsushin after WhatsApp rejected the runtime bridge with `Client outdated (405)`. The bridge REST process stayed alive, so Docker could look healthy while the WhatsApp socket repeatedly reconnected without authentication; media never reached the configured ASR provider.
+
+- Upgraded `go.mau.fi/whatsmeow` in both the tenant WhatsApp MCP and QA tester bridge from the 2026-03-27 revision to `v0.0.0-20260722203353-e9a033b24933` (2026-07-22). This includes the upstream fix that propagates `store.SetWAVersion()` into the login payload's advertised app version, not only the stored version value.
+- Updated both bridge builders to Go 1.26 and refreshed their transitive module locks.
+- Added a regression contract test to both Go modules proving that a runtime WhatsApp Web version update also changes `BaseClientPayload.UserAgent.AppVersion`.
+- Deployment note: rebuilding `tsushin/whatsapp-mcp:latest` does not change an already-created container's immutable image. Existing affected instances must be recreated through `MCPContainerManager` while preserving their `/app/store` session bind mount; a normal restart is insufficient and `/logout` must not be used.
+
 ### Added — GitHub commits → WhatsApp polling trigger (2026-06-25)
 
 A **polling** trigger that watches a repo branch's commits over the GitHub REST API and sends a deterministic WhatsApp notification when new commits land — a sibling of the `github_projects` board trigger. GitHub *does* emit `push` webhooks, but they cannot reach this deployment (the public origin sits behind a Cloudflare WAF source-IP allowlist), so the trigger polls **outbound** and diffs commit SHAs. **No version bump.**
