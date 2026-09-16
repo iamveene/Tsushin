@@ -448,6 +448,11 @@ class Agent(Base):
     max_agentic_rounds = Column(Integer, nullable=True, default=1)
     max_agentic_loop_bytes = Column(Integer, nullable=True, default=8192)
 
+    # Localization: per-agent IANA timezone (NULL = system default America/Sao_Paulo).
+    # Drives the agent's injected "current time" and relative-reminder parsing so
+    # scheduling is computed in the agent's local zone, not the container's UTC.
+    timezone = Column(String(50), nullable=True)
+
     # Phase 10: Channel Configuration
     # Determines which channels this agent can interact through
     enabled_channels = Column(JSON, default=["playground", "whatsapp"])  # Available: playground, whatsapp, telegram, slack, discord, webhook

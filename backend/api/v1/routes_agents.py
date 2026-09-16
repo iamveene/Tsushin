@@ -31,6 +31,21 @@ router = APIRouter()
 VALID_CHANNELS = {"playground", "whatsapp", "telegram", "slack", "discord"}
 
 
+def _validate_agent_timezone(value: Optional[str]) -> Optional[str]:
+    """Validate and normalize a nullable IANA timezone name."""
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(value)
+    except Exception as exc:
+        raise ValueError(f"Invalid IANA timezone: '{value}'") from exc
+    return value
+
+
 # ============================================================================
 # Schemas
 # ============================================================================
@@ -65,6 +80,7 @@ class PublicAgentSummary(BaseModel):
     skills: List[str] = []
     is_team_member: bool = False
     current_team_id: Optional[int] = None
+    timezone: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -119,12 +135,18 @@ class AgentCreateRequest(BaseModel):
     memory_isolation_mode: Optional[str] = Field(None, pattern=_MEMORY_ISOLATION_MODE_PATTERN)
     max_agentic_rounds: Optional[int] = Field(None, ge=1, le=8)
     max_agentic_loop_bytes: Optional[int] = Field(None, ge=1024, le=65536)
+    timezone: Optional[str] = Field(None, max_length=50)
     trigger_dm_enabled: Optional[bool] = None
     enable_semantic_search: Optional[bool] = None
     is_active: bool = True
     is_default: bool = False
     skill_types: Optional[List[str]] = None
     sandboxed_tool_ids: Optional[List[int]] = None
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_agent_timezone(value)
 
     @field_validator("name")
     @classmethod
@@ -184,9 +206,15 @@ class AgentUpdateRequest(BaseModel):
     memory_isolation_mode: Optional[str] = Field(None, pattern=_MEMORY_ISOLATION_MODE_PATTERN)
     max_agentic_rounds: Optional[int] = Field(None, ge=1, le=8)
     max_agentic_loop_bytes: Optional[int] = Field(None, ge=1024, le=65536)
+    timezone: Optional[str] = Field(None, max_length=50)
     trigger_dm_enabled: Optional[bool] = None
     enable_semantic_search: Optional[bool] = None
     is_active: Optional[bool] = None
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: Optional[str]) -> Optional[str]:
+        return _validate_agent_timezone(value)
 
     @field_validator("name")
     @classmethod
@@ -324,6 +352,7 @@ def _enrich_agent(agent: Agent, db: Session) -> dict:
         "skills": skill_types,
         "is_team_member": bool(getattr(agent, "is_team_member", False)),
         "current_team_id": getattr(agent, "current_team_id", None),
+        "timezone": getattr(agent, "timezone", None),
         "created_at": agent.created_at.isoformat() if agent.created_at else None,
         "updated_at": agent.updated_at.isoformat() if agent.updated_at else None,
     }
@@ -350,6 +379,7 @@ def _get_agent_detail(agent: Agent, db: Session) -> dict:
         "response_template": agent.response_template,
         "max_agentic_rounds": agent.max_agentic_rounds,
         "max_agentic_loop_bytes": agent.max_agentic_loop_bytes,
+        "timezone": getattr(agent, "timezone", None),
         "contact_id": agent.contact_id,
         "tenant_id": agent.tenant_id,
     })
@@ -537,6 +567,7 @@ async def create_agent(
         memory_isolation_mode=request.memory_isolation_mode or "isolated",
         max_agentic_rounds=request.max_agentic_rounds if request.max_agentic_rounds is not None else 1,
         max_agentic_loop_bytes=request.max_agentic_loop_bytes if request.max_agentic_loop_bytes is not None else 8192,
+        timezone=request.timezone,
         trigger_dm_enabled=request.trigger_dm_enabled,
         enable_semantic_search=request.enable_semantic_search if request.enable_semantic_search is not None else True,
         is_active=request.is_active,

@@ -2268,6 +2268,8 @@ Scheduled messages and tool-execution steps are handled by the Flows subsystem (
 
 `backend/scheduler/worker.py` runs the periodic tick.
 
+**Timezone (BUG-791).** Relative and absolute times in reminders ("in 15 minutes", "tomorrow at 9am") are parsed in the **agent's timezone**, set by the nullable `agent.timezone` column (IANA string; NULL = `DEFAULT_AGENT_TIMEZONE` = `America/Sao_Paulo`, in `backend/constants/agent_config.py`). The agent's injected "current time" (`agent_service.py`) and the Flows reminder create/parse paths (`flows_skill.py`) both resolve this zone. Previously the injected clock used a naive `datetime.now()` that returned the container's **UTC**, so relative reminders were computed against the wrong "now" and fired ~3h late. The tz is threaded via `AgentRouter.get_agent_config`/`_agent_to_config` with a read-site default, and exposed as `timezone` on the agent API (zoneinfo-validated). Note: the **Google Calendar** provider still stores events using the *integration's* timezone (`google_integrations.timezone`) — keep it aligned with the agent's zone for that provider.
+
 ### 14.2 Scheduler Providers
 
 Unified provider interface: `backend/agent/skills/scheduler/base.py`.

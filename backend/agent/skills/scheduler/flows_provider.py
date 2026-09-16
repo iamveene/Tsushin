@@ -9,16 +9,16 @@ Features:
 - AI-driven multi-turn conversations (CONVERSATION)
 - Recurrence support (daily, weekly, monthly)
 - Contact resolution (@mentions, names)
-- Brazil timezone handling (GMT-3)
+- Per-agent IANA timezone handling
 """
 
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 import json
 import logging
-import pytz
 
 from sqlalchemy.orm import Session
+from utils.agent_timezone import resolve_timezone_name, to_utc_naive, utc_to_local
 
 from .base import (
     SchedulerProviderBase,
@@ -29,9 +29,6 @@ from .base import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Brazil timezone (GMT-3)
-BRAZIL_TZ = pytz.timezone('America/Sao_Paulo')
 
 
 class FlowsProvider(SchedulerProviderBase):
@@ -51,7 +48,7 @@ class FlowsProvider(SchedulerProviderBase):
         - Natural language date/time parsing (Portuguese + English)
         - Contact resolution from @mentions and names
         - Recurrence rules (daily, weekly, monthly)
-        - Brazil timezone (GMT-3) handling
+        - Per-agent timezone handling
 
     Example:
         provider = FlowsProvider(db, tenant_id="tenant_123")
@@ -208,6 +205,12 @@ class FlowsProvider(SchedulerProviderBase):
         self._log_info(f"Creating {event_type} event: {title}")
 
         scheduler_service = self._get_scheduler_service()
+        timezone_name = resolve_timezone_name(kwargs.get("timezone"))
+        start_is_utc = bool(kwargs.get("start_is_utc"))
+        if start.tzinfo is None and start_is_utc:
+            storage_start = start
+        else:
+            storage_start = to_utc_naive(start, timezone_name)
 
         # Determine agent_id
         agent_id = kwargs.get('agent_id') or self.agent_id or 1
@@ -248,10 +251,10 @@ class FlowsProvider(SchedulerProviderBase):
             freq_match = recurrence.upper()
 
             if 'DAILY' in freq_match:
-                recurrence_rule = {'frequency': 'daily', 'interval': 1, 'timezone': 'America/Sao_Paulo'}
+                recurrence_rule = {'frequency': 'daily', 'interval': 1, 'timezone': timezone_name}
                 execution_method = 'recurring'
             elif 'WEEKLY' in freq_match:
-                recurrence_rule = {'frequency': 'weekly', 'interval': 1, 'timezone': 'America/Sao_Paulo'}
+                recurrence_rule = {'frequency': 'weekly', 'interval': 1, 'timezone': timezone_name}
                 execution_method = 'recurring'
 
                 # Extract BYDAY if present (e.g., BYDAY=MO)
@@ -263,12 +266,12 @@ class FlowsProvider(SchedulerProviderBase):
                         recurrence_rule['days_of_week'] = days_of_week
 
             elif 'MONTHLY' in freq_match:
-                recurrence_rule = {'frequency': 'monthly', 'interval': 1, 'timezone': 'America/Sao_Paulo'}
+                recurrence_rule = {'frequency': 'monthly', 'interval': 1, 'timezone': timezone_name}
                 execution_method = 'recurring'
 
             # Extract start time from scheduled_at for recurring events
             if start:
-                start_time = start.strftime('%H:%M')
+                start_time = utc_to_local(storage_start, timezone_name).strftime('%H:%M')
                 recurrence_rule['start_time'] = start_time
 
         # For recurring events, create as FlowDefinition instead of ScheduledEvent
@@ -285,13 +288,13 @@ class FlowsProvider(SchedulerProviderBase):
                     name=flow_name,
                     description=description or title,
                     execution_method='recurring',
-                    scheduled_at=start,
+                    scheduled_at=storage_start,
                     recurrence_rule=recurrence_rule,
                     flow_type=event_type.lower() if event_type in ['NOTIFICATION', 'CONVERSATION'] else 'notification',
                     default_agent_id=agent_id,
                     initiator_type='agentic',
                     is_active=True,
-                    next_execution_at=start
+                    next_execution_at=storage_start
                 )
                 self.db.add(flow)
                 self.db.flush()
@@ -317,7 +320,7 @@ class FlowsProvider(SchedulerProviderBase):
                     id=f"flows_recurring_{flow.id}",
                     provider=self.provider_type.value,
                     title=title,
-                    start=start,
+                    start=storage_start,
                     end=end,
                     description=description,
                     status=SchedulerEventStatus.SCHEDULED,
@@ -345,7 +348,7 @@ class FlowsProvider(SchedulerProviderBase):
                 creator_type='AGENT',
                 creator_id=agent_id,
                 event_type=event_type.upper(),
-                scheduled_at=start,
+                scheduled_at=storage_start,
                 payload=payload,
                 recurrence_rule=recurrence_rule if not execution_method == 'recurring' else None,
                 tenant_id=self.tenant_id,
@@ -384,6 +387,12 @@ class FlowsProvider(SchedulerProviderBase):
         from models import ScheduledEvent
 
         self._log_info(f"Listing events from {start} to {end}")
+        timezone_name = resolve_timezone_name(kwargs.get("timezone"))
+        start_is_utc = bool(kwargs.get("start_is_utc"))
+        if not (start.tzinfo is None and start_is_utc):
+            start = to_utc_naive(start, timezone_name)
+        if not (end.tzinfo is None and start_is_utc):
+            end = to_utc_naive(end, timezone_name)
 
         # Build query
         db_query = self.db.query(ScheduledEvent).filter(
@@ -505,8 +514,15 @@ class FlowsProvider(SchedulerProviderBase):
 
         # Update fields
         if start:
-            event.scheduled_at = start
-            event.next_execution_at = start
+            timezone_name = resolve_timezone_name(kwargs.get("timezone"))
+            start_is_utc = bool(kwargs.get("start_is_utc"))
+            storage_start = (
+                start
+                if start.tzinfo is None and start_is_utc
+                else to_utc_naive(start, timezone_name)
+            )
+            event.scheduled_at = storage_start
+            event.next_execution_at = storage_start
 
         if title or description:
             payload = json.loads(event.payload) if isinstance(event.payload, str) else event.payload

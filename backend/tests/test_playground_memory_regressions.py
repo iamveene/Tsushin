@@ -371,6 +371,8 @@ def test_playground_detect_only_keeps_thread_transcript_but_not_context_reuse(mo
     session = _make_session()
     try:
         agent = _seed_agent(session, "isolated")
+        agent.timezone = "Europe/Lisbon"
+        session.commit()
         thread_one, _ = _seed_threads(session, agent.id)
 
         sentinel_module = types.ModuleType("services.sentinel_service")
@@ -409,9 +411,11 @@ def test_playground_detect_only_keeps_thread_transcript_but_not_context_reuse(mo
 
         agent_service_module = types.ModuleType("agent.agent_service")
         captured_messages = []
+        captured_configs = []
 
         class FakeAgentService:
-            def __init__(self, *args, **kwargs):
+            def __init__(self, config, *args, **kwargs):
+                captured_configs.append(config)
                 self.ai_client = None
 
             async def process_message(self, *, sender_key, message_text, original_query):
@@ -475,6 +479,8 @@ def test_playground_detect_only_keeps_thread_transcript_but_not_context_reuse(mo
         assert any(msg["content"] == "response for remember this exact token: alpha-123" for msg in history)
         assert "alpha-123" in captured_messages[0]
         assert "alpha-123" not in captured_messages[1]
+        assert captured_configs
+        assert all(config["timezone"] == "Europe/Lisbon" for config in captured_configs)
     finally:
         session.close()
 

@@ -23,6 +23,7 @@ from services.playground_thread_service import (
     resolve_playground_identity,
     sync_playground_thread_recipient,
 )
+from constants.agent_config import DEFAULT_AGENT_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -497,6 +498,7 @@ class PlaygroundService:
                 "semantic_similarity_threshold": agent.semantic_similarity_threshold or 0.5,
                 # BUG-387 fix: Pass provider_instance_id so AIClient resolves instance-scoped credentials
                 "provider_instance_id": agent.provider_instance_id,
+                "timezone": getattr(agent, "timezone", None) or DEFAULT_AGENT_TIMEZONE,
                 "max_agentic_rounds": getattr(agent, "max_agentic_rounds", None),
                 "max_agentic_loop_bytes": getattr(agent, "max_agentic_loop_bytes", None),
                 # Fact extraction configuration (auto-enabled for all conversations)
@@ -1399,6 +1401,7 @@ class PlaygroundService:
                 "semantic_similarity_threshold": agent.semantic_similarity_threshold or 0.5,
                 # BUG-387 fix: Pass provider_instance_id so AIClient resolves instance-scoped credentials
                 "provider_instance_id": agent.provider_instance_id,
+                "timezone": getattr(agent, "timezone", None) or DEFAULT_AGENT_TIMEZONE,
             }
 
             # Initialize memory manager

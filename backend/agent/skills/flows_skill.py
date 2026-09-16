@@ -23,6 +23,7 @@ from .base import BaseSkill, InboundMessage, SkillResult
 from typing import Dict, Any, Optional, List
 import logging
 from datetime import datetime, timedelta
+from utils.agent_timezone import resolve_timezone, resolve_timezone_name, utc_to_local
 
 # Import existing skill implementations to reuse logic
 from .scheduler_skill import SchedulerSkill
@@ -237,6 +238,41 @@ class FlowsSkill(BaseSkill):
         # Return resolved intent model
         return intent_model
 
+    def _resolve_timezone(self, config: Dict[str, Any] = None):
+        """Resolve the agent's IANA timezone.
+
+        Relative-time parsing must happen in the agent's local zone so the naive
+        datetimes handed to calendar providers represent local wall-clock, not the
+        container's UTC. Falls back to DEFAULT_AGENT_TIMEZONE on missing/invalid tz.
+        """
+        return resolve_timezone((config or {}).get('timezone'))
+
+    def _resolve_timezone_name(self, config: Dict[str, Any] = None) -> str:
+        """Return the effective IANA timezone name for prompts/providers."""
+        return resolve_timezone_name((config or {}).get('timezone'))
+
+    def _event_datetime_for_display(
+        self,
+        event,
+        config: Dict[str, Any] = None,
+        *,
+        use_end: bool = False,
+    ) -> Optional[datetime]:
+        """Return an event timestamp in the agent's timezone for user output.
+
+        Built-in Flows stores naive UTC. External providers should return aware
+        timestamps for timed events; legacy/all-day provider values remain naive
+        local wall time and are left unchanged.
+        """
+        value = event.end if use_end else event.start
+        if value is None:
+            return None
+        if value.tzinfo is not None:
+            return value.astimezone(self._resolve_timezone(config))
+        if getattr(event, "provider", None) == "flows":
+            return utc_to_local(value, self._resolve_timezone_name(config))
+        return value
+
     async def _detect_flow_intent(self, text: str, ai_model: str = None) -> str:
         """
         Detect flow operation intent using AI (NO hardcoded keywords).
@@ -303,7 +339,8 @@ Answer:"""
     async def _process_query_with_provider(
         self,
         provider: SchedulerProviderBase,
-        message: InboundMessage
+        message: InboundMessage,
+        config: Dict[str, Any] = None,
     ) -> SkillResult:
         """
         Process a query request using an external provider.
@@ -323,7 +360,7 @@ Answer:"""
 
             # Parse user query to determine time range
             message_lower = message.body.lower()
-            now = datetime.now()
+            now = datetime.now(self._resolve_timezone(config)).replace(tzinfo=None)
 
             # Determine date range based on user query
             if any(kw in message_lower for kw in ['essa semana', 'this week', 'esta semana', 'da semana']):
@@ -337,7 +374,12 @@ Answer:"""
                 start = now
                 end = now + timedelta(days=7)
 
-            events = await provider.list_events(start=start, end=end, max_results=20)
+            events = await provider.list_events(
+                start=start,
+                end=end,
+                max_results=20,
+                timezone=self._resolve_timezone_name(config),
+            )
 
             if not events:
                 return SkillResult(
@@ -350,7 +392,8 @@ Answer:"""
             lines = [f"📅 Your events via {provider.provider_name} ({len(events)} found):\n"]
             for event in events:
                 # Format event time
-                event_time = event.start.strftime('%m/%d/%Y at %H:%M') if event.start else 'No date'
+                display_start = self._event_datetime_for_display(event, config)
+                event_time = display_start.strftime('%m/%d/%Y at %H:%M') if display_start else 'No date'
                 status_emoji = '✅' if event.status.value == 'completed' else '📌'
 
                 # Extract short ID (last 8 chars after gcal_)
@@ -390,7 +433,8 @@ Answer:"""
         self,
         provider: SchedulerProviderBase,
         message: InboundMessage,
-        ai_model: str
+        ai_model: str,
+        config: Dict[str, Any] = None
     ) -> SkillResult:
         """
         Process a create request using an external provider.
@@ -429,7 +473,7 @@ Answer:"""
             # #endregion
 
             # Parse the message to extract event details using AI
-            parsed = await self._parse_event_from_message(message.body, ai_model)
+            parsed = await self._parse_event_from_message(message.body, ai_model, config=config)
 
             # #region agent log
             try:
@@ -478,7 +522,8 @@ Answer:"""
                 location=parsed.get('location'),
                 recurrence=recurrence_rrule,
                 reminder_minutes=parsed.get('reminder_minutes', 30),
-                sender_key=message.sender_key
+                sender_key=message.sender_key,
+                timezone=self._resolve_timezone_name(config),
             )
 
             # #region agent log
@@ -500,7 +545,8 @@ Answer:"""
             # #endregion
 
             # Format confirmation message
-            event_time = event.start.strftime('%m/%d/%Y at %H:%M') if event.start else 'Not specified'
+            display_start = self._event_datetime_for_display(event, config)
+            event_time = display_start.strftime('%m/%d/%Y at %H:%M') if display_start else 'Not specified'
 
             confirmation = f"✅ Event created via {provider.provider_name}!\n\n"
             confirmation += f"📌 **{event.title}**\n"
@@ -524,8 +570,9 @@ Answer:"""
                         duration_str = f"{hours}h {mins}min"
 
                 confirmation += f"⏱️ Duration: {duration_str}"
-                if event.end:
-                    end_time_str = event.end.strftime('%H:%M')
+                display_end = self._event_datetime_for_display(event, config, use_end=True)
+                if display_end:
+                    end_time_str = display_end.strftime('%H:%M')
                     confirmation += f" (ends at {end_time_str})"
                 confirmation += "\n"
 
@@ -583,7 +630,8 @@ Answer:"""
         self,
         provider: SchedulerProviderBase,
         message: InboundMessage,
-        ai_model: str
+        ai_model: str,
+        config: Dict[str, Any] = None,
     ) -> SkillResult:
         """
         Process a delete request using an external provider.
@@ -600,7 +648,12 @@ Answer:"""
         """
         try:
             # First, try to parse an event ID from the message
-            event_id = await self._parse_event_id_from_message(message.body, ai_model, provider)
+            event_id = await self._parse_event_id_from_message(
+                message.body,
+                ai_model,
+                provider,
+                config=config,
+            )
 
             if not event_id:
                 return SkillResult(
@@ -645,7 +698,8 @@ Answer:"""
         self,
         provider: SchedulerProviderBase,
         message: InboundMessage,
-        ai_model: str
+        ai_model: str,
+        config: Dict[str, Any] = None
     ) -> SkillResult:
         """
         Process an update request using an external provider.
@@ -662,7 +716,7 @@ Answer:"""
         """
         try:
             # Parse event ID and update details from message
-            update_info = await self._parse_event_update_from_message(message.body, ai_model, provider)
+            update_info = await self._parse_event_update_from_message(message.body, ai_model, provider, config=config)
 
             if not update_info or not update_info.get('event_id'):
                 return SkillResult(
@@ -680,11 +734,13 @@ Answer:"""
                 start=update_info.get('start'),
                 end=update_info.get('end'),
                 description=update_info.get('description'),
-                location=update_info.get('location')
+                location=update_info.get('location'),
+                timezone=self._resolve_timezone_name(config),
             )
 
             # Format confirmation message
-            event_time = event.start.strftime('%m/%d/%Y at %H:%M') if event.start else 'Not specified'
+            display_start = self._event_datetime_for_display(event, config)
+            event_time = display_start.strftime('%m/%d/%Y at %H:%M') if display_start else 'Not specified'
 
             confirmation = f"✅ Event updated via {provider.provider_name}!\n\n"
             confirmation += f"📌 **{event.title}**\n"
@@ -716,7 +772,8 @@ Answer:"""
         self,
         text: str,
         ai_model: str,
-        provider: SchedulerProviderBase
+        provider: SchedulerProviderBase,
+        config: Dict[str, Any] = None,
     ) -> Optional[str]:
         """
         Parse event ID from natural language message.
@@ -745,12 +802,13 @@ Answer:"""
                 return match.group(1)
 
             # Get recent events to help AI identify the target
-            now = datetime.now()
+            now = datetime.now(self._resolve_timezone(config)).replace(tzinfo=None)
             from datetime import timedelta
             events = await provider.list_events(
                 start=now - timedelta(days=7),
                 end=now + timedelta(days=30),
-                max_results=20
+                max_results=20,
+                timezone=self._resolve_timezone_name(config),
             )
 
             if not events:
@@ -759,7 +817,8 @@ Answer:"""
             # Format events for AI context
             events_list = []
             for event in events:
-                event_time = event.start.strftime('%Y-%m-%d %H:%M') if event.start else 'No date'
+                display_start = self._event_datetime_for_display(event, config)
+                event_time = display_start.strftime('%Y-%m-%d %H:%M') if display_start else 'No date'
                 events_list.append({
                     'id': event.id,
                     'title': event.title,
@@ -816,7 +875,8 @@ Answer:"""
         self,
         text: str,
         ai_model: str,
-        provider: SchedulerProviderBase
+        provider: SchedulerProviderBase,
+        config: Dict[str, Any] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Parse event update details from natural language message.
@@ -832,10 +892,13 @@ Answer:"""
         try:
             from agent.ai_client import AIClient
             import json
-            import pytz
-
             # First, identify which event to update (similar to delete)
-            event_id = await self._parse_event_id_from_message(text, ai_model, provider)
+            event_id = await self._parse_event_id_from_message(
+                text,
+                ai_model,
+                provider,
+                config=config,
+            )
             if not event_id:
                 return None
 
@@ -846,13 +909,13 @@ Answer:"""
 
             ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
 
-            # Get current time context
-            brazil_tz = pytz.timezone('America/Sao_Paulo')
-            now_brazil = datetime.now(brazil_tz)
-            current_time_str = now_brazil.strftime('%Y-%m-%d %H:%M')
+            timezone_name = self._resolve_timezone_name(config)
+            agent_tz = self._resolve_timezone(config)
+            now_local = datetime.now(agent_tz)
+            current_time_str = now_local.strftime('%Y-%m-%d %H:%M')
 
             system_prompt = f"""You are parsing event update details from natural language.
-Current date/time (Brazil): {current_time_str}
+Current date/time ({timezone_name}): {current_time_str}
 
 Extract ONLY the fields that should be changed. Return JSON with:
 - title: New event title (only if mentioned)
@@ -912,7 +975,7 @@ Answer (JSON only):"""
             logger.error(f"Error parsing event update from message: {e}", exc_info=True)
             return None
 
-    async def _parse_event_from_message(self, text: str, ai_model: str) -> Optional[Dict[str, Any]]:
+    async def _parse_event_from_message(self, text: str, ai_model: str, config: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
         """
         Parse event details from natural language using AI.
 
@@ -928,8 +991,6 @@ Answer (JSON only):"""
         try:
             from agent.ai_client import AIClient
             import json
-            import pytz
-
             from constants.llm_models import infer_provider_from_model
             ai_provider = infer_provider_from_model(ai_model)
             if ai_provider == "unknown":
@@ -937,14 +998,14 @@ Answer (JSON only):"""
 
             ai_client = AIClient(provider=ai_provider, model_name=ai_model, db=self._db_session, token_tracker=self._token_tracker, tenant_id=self._resolve_tenant_id())
 
-            # Get current time in Brazil timezone for context
-            brazil_tz = pytz.timezone('America/Sao_Paulo')
-            now_brazil = datetime.now(brazil_tz)
-            current_time_str = now_brazil.strftime('%Y-%m-%d %H:%M')
-            current_weekday = now_brazil.strftime('%A')
+            timezone_name = self._resolve_timezone_name(config)
+            agent_tz = self._resolve_timezone(config)
+            now_local = datetime.now(agent_tz)
+            current_time_str = now_local.strftime('%Y-%m-%d %H:%M')
+            current_weekday = now_local.strftime('%A')
 
             system_prompt = f"""You are a scheduling assistant that extracts event details from natural language.
-Current date/time (Brazil/Sao Paulo): {current_time_str} ({current_weekday})
+Current date/time ({timezone_name}): {current_time_str} ({current_weekday})
 
 Extract the following from the user's message:
 - title: Brief description of the event (required)
@@ -987,20 +1048,18 @@ Return ONLY a valid JSON object, no other text."""
             if parsed.get('start_datetime'):
                 try:
                     start_dt = datetime.fromisoformat(parsed['start_datetime'].replace('Z', '+00:00'))
-                    # If naive, assume Brazil timezone - keep it as naive for Google Calendar
+                    # If naive, treat it as agent-local wall time for the provider.
                     # The calendar service will specify the timezone separately
                     # Don't convert to UTC - Google Calendar expects local time with timezone hint
                     if start_dt.tzinfo is not None:
-                        # If it has timezone, convert to Brazil time and make naive
-                        start_dt = start_dt.astimezone(brazil_tz).replace(tzinfo=None)
-                    # Otherwise keep as-is (already in Brazil local time from AI)
+                        start_dt = start_dt.astimezone(agent_tz).replace(tzinfo=None)
+                    # Otherwise keep as-is (already in agent-local time from AI)
                     result['start'] = start_dt
-                    logger.info(f"FlowsSkill: Parsed start time as Brazil local: {start_dt}")
+                    logger.info(f"FlowsSkill: Parsed start time as {timezone_name} local: {start_dt}")
                 except ValueError:
-                    # Fallback to current time + 1 hour (in Brazil local)
-                    result['start'] = datetime.now(brazil_tz).replace(tzinfo=None) + timedelta(hours=1)
+                    result['start'] = datetime.now(agent_tz).replace(tzinfo=None) + timedelta(hours=1)
             else:
-                result['start'] = datetime.now(brazil_tz).replace(tzinfo=None) + timedelta(hours=1)
+                result['start'] = datetime.now(agent_tz).replace(tzinfo=None) + timedelta(hours=1)
 
             # Extract duration_minutes if present
             duration_minutes = parsed.get('duration_minutes')
@@ -1021,7 +1080,7 @@ Return ONLY a valid JSON object, no other text."""
                 try:
                     end_dt = datetime.fromisoformat(parsed['end_datetime'].replace('Z', '+00:00'))
                     if end_dt.tzinfo is not None:
-                        end_dt = end_dt.astimezone(brazil_tz).replace(tzinfo=None)
+                        end_dt = end_dt.astimezone(agent_tz).replace(tzinfo=None)
                     result['end'] = end_dt
                 except ValueError:
                     pass
@@ -1045,7 +1104,7 @@ Return ONLY a valid JSON object, no other text."""
             # Fallback: use the entire message as title
             return {
                 'title': text[:100],  # Truncate if too long
-                'start': datetime.now() + timedelta(hours=1)
+                'start': datetime.now(self._resolve_timezone(config)).replace(tzinfo=None) + timedelta(hours=1)
             }
         except Exception as e:
             logger.error(f"FlowsSkill: Error parsing event from message: {e}", exc_info=True)
@@ -1124,11 +1183,11 @@ Return ONLY a valid JSON object, no other text."""
                 if provider_type == 'flows':
                     # Use existing query skill for built-in Flows (handles AI parsing)
                     logger.info(f"FlowsSkill: Routing to built-in query handler")
-                    result = await self._query.process(message, {})
+                    result = await self._query.process(message, config)
                 else:
                     # External provider - use provider's list_events method
                     logger.info(f"FlowsSkill: Routing query to {provider_name} provider")
-                    result = await self._process_query_with_provider(provider, message)
+                    result = await self._process_query_with_provider(provider, message, config=config)
 
                 # Add provider info to metadata
                 if result.metadata:
@@ -1157,11 +1216,11 @@ Return ONLY a valid JSON object, no other text."""
                 if provider_type == 'flows':
                     # Use existing scheduler skill for built-in Flows (handles AI parsing)
                     logger.info(f"FlowsSkill: Routing to built-in scheduler handler")
-                    result = await self._scheduler.process(message, {})
+                    result = await self._scheduler.process(message, config)
                 else:
                     # External provider - use provider's create_event method
                     logger.info(f"FlowsSkill: Routing create to {provider_name} provider")
-                    result = await self._process_create_with_provider(provider, message, resolved_model)
+                    result = await self._process_create_with_provider(provider, message, resolved_model, config=config)
 
                 # Add provider info to metadata
                 if result.metadata:
@@ -1185,7 +1244,12 @@ Return ONLY a valid JSON object, no other text."""
 
                 # Delete operation requires provider (no built-in Flows delete from NL)
                 logger.info(f"FlowsSkill: Routing delete to {provider_name} provider")
-                result = await self._process_delete_with_provider(provider, message, resolved_model)
+                result = await self._process_delete_with_provider(
+                    provider,
+                    message,
+                    resolved_model,
+                    config=config,
+                )
 
                 # Add provider info to metadata
                 if result.metadata:
@@ -1209,7 +1273,7 @@ Return ONLY a valid JSON object, no other text."""
 
                 # Update operation requires provider (no built-in Flows update from NL)
                 logger.info(f"FlowsSkill: Routing update to {provider_name} provider")
-                result = await self._process_update_with_provider(provider, message, resolved_model)
+                result = await self._process_update_with_provider(provider, message, resolved_model, config=config)
 
                 # Add provider info to metadata
                 if result.metadata:
@@ -1600,21 +1664,20 @@ Return ONLY a valid JSON object, no other text."""
             )
 
         # Parse datetime
-        import pytz
         from datetime import timedelta
 
-        brazil_tz = pytz.timezone('America/Sao_Paulo')
-        now = datetime.now(brazil_tz)
+        agent_tz = self._resolve_timezone(config)
+        now = datetime.now(agent_tz)
 
         try:
             # Try ISO format first
             start_dt = datetime.fromisoformat(datetime_str.replace('Z', '+00:00'))
             if start_dt.tzinfo is not None:
-                start_dt = start_dt.astimezone(brazil_tz).replace(tzinfo=None)
+                start_dt = start_dt.astimezone(agent_tz).replace(tzinfo=None)
         except ValueError:
             # Natural language - use AI to parse
             resolved_model = self._resolve_intent_detection_model(config)
-            parsed = await self._parse_event_from_message(f"Remind me to {title} {datetime_str}", resolved_model)
+            parsed = await self._parse_event_from_message(f"Remind me to {title} {datetime_str}", resolved_model, config=config)
             if parsed and parsed.get('start'):
                 start_dt = parsed['start']
             else:
@@ -1648,11 +1711,13 @@ Return ONLY a valid JSON object, no other text."""
             location=arguments.get("location"),
             recurrence=recurrence_rrule,
             reminder_minutes=30,
-            sender_key=message.sender_key
+            sender_key=message.sender_key,
+            timezone=self._resolve_timezone_name(config),
         )
 
         # Format confirmation
-        event_time = event.start.strftime('%m/%d/%Y at %H:%M') if event.start else 'Not specified'
+        display_start = self._event_datetime_for_display(event, config)
+        event_time = display_start.strftime('%m/%d/%Y at %H:%M') if display_start else 'Not specified'
 
         confirmation = f"✅ Reminder created via {provider_name}!\n\n"
         confirmation += f"📌 **{event.title}**\n"
@@ -1703,13 +1768,18 @@ Return ONLY a valid JSON object, no other text."""
             )
 
         days_ahead = arguments.get("days_ahead", 7)
-        now = datetime.now()
+        now = datetime.now(self._resolve_timezone(config)).replace(tzinfo=None)
         end = now + timedelta(days=days_ahead)
 
         provider_name = provider.provider_name
         provider_type = provider.provider_type.value
 
-        events = await provider.list_events(start=now, end=end, max_results=20)
+        events = await provider.list_events(
+            start=now,
+            end=end,
+            max_results=20,
+            timezone=self._resolve_timezone_name(config),
+        )
 
         if not events:
             return SkillResult(
@@ -1722,7 +1792,8 @@ Return ONLY a valid JSON object, no other text."""
         import re
         lines = [f"📅 Your reminders via {provider_name} ({len(events)} found):\n"]
         for event in events:
-            event_time = event.start.strftime('%m/%d/%Y at %H:%M') if event.start else 'No date'
+            display_start = self._event_datetime_for_display(event, config)
+            event_time = display_start.strftime('%m/%d/%Y at %H:%M') if display_start else 'No date'
             status_emoji = '✅' if event.status.value == 'completed' else '📌'
 
             short_id = event.id.split('_')[-1][:8] if '_' in event.id else event.id[:8]
@@ -1778,18 +1849,17 @@ Return ONLY a valid JSON object, no other text."""
             )
 
         # Parse datetime if provided
-        import pytz
         new_start = None
         datetime_str = arguments.get("datetime")
         if datetime_str:
-            brazil_tz = pytz.timezone('America/Sao_Paulo')
+            agent_tz = self._resolve_timezone(config)
             try:
                 new_start = datetime.fromisoformat(datetime_str.replace('Z', '+00:00'))
                 if new_start.tzinfo is not None:
-                    new_start = new_start.astimezone(brazil_tz).replace(tzinfo=None)
+                    new_start = new_start.astimezone(agent_tz).replace(tzinfo=None)
             except ValueError:
                 resolved_model = self._resolve_intent_detection_model(config)
-                parsed = await self._parse_event_from_message(f"Update to {datetime_str}", resolved_model)
+                parsed = await self._parse_event_from_message(f"Update to {datetime_str}", resolved_model, config=config)
                 if parsed and parsed.get('start'):
                     new_start = parsed['start']
 
@@ -1803,10 +1873,12 @@ Return ONLY a valid JSON object, no other text."""
             start=new_start,
             end=None,
             description=arguments.get("description"),
-            location=arguments.get("location")
+            location=arguments.get("location"),
+            timezone=self._resolve_timezone_name(config),
         )
 
-        event_time = event.start.strftime('%m/%d/%Y at %H:%M') if event.start else 'Not specified'
+        display_start = self._event_datetime_for_display(event, config)
+        event_time = display_start.strftime('%m/%d/%Y at %H:%M') if display_start else 'Not specified'
 
         confirmation = f"✅ Reminder updated via {provider_name}!\n\n"
         confirmation += f"📌 **{event.title}**\n"

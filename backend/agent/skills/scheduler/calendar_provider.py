@@ -20,6 +20,7 @@ import logging
 import os
 
 from sqlalchemy.orm import Session
+from utils.agent_timezone import localize_wall_time, resolve_timezone_name
 
 from .base import (
     SchedulerProviderBase,
@@ -136,22 +137,13 @@ class GoogleCalendarProvider(SchedulerProviderBase):
             start_str = start_data.get("dateTime", "")
             end_str = end_data.get("dateTime", "")
 
-            # Remove timezone suffix for parsing
             if start_str:
-                if "+" in start_str:
-                    start_str = start_str.rsplit("+", 1)[0]
-                elif start_str.endswith("Z"):
-                    start_str = start_str[:-1]
-                start = datetime.fromisoformat(start_str)
+                start = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
             else:
                 start = datetime.utcnow()
 
             if end_str:
-                if "+" in end_str:
-                    end_str = end_str.rsplit("+", 1)[0]
-                elif end_str.endswith("Z"):
-                    end_str = end_str[:-1]
-                end = datetime.fromisoformat(end_str)
+                end = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
             else:
                 end = None
 
@@ -267,6 +259,12 @@ class GoogleCalendarProvider(SchedulerProviderBase):
 
         try:
             service = self._get_service()
+            timezone_name = resolve_timezone_name(kwargs.get("timezone"))
+            if start.tzinfo is None:
+                # Validate DST gaps while preserving Google's local-wall-time API.
+                localize_wall_time(start, timezone_name)
+            if end is not None and end.tzinfo is None:
+                localize_wall_time(end, timezone_name)
 
             # Convert RRULE string to list
             recurrence_list = [recurrence] if recurrence else None
@@ -279,7 +277,8 @@ class GoogleCalendarProvider(SchedulerProviderBase):
                 location=location,
                 attendees=attendees,
                 reminder_minutes=reminder_minutes,
-                recurrence=recurrence_list
+                recurrence=recurrence_list,
+                timezone=timezone_name,
             )
 
             # #region agent log
@@ -382,6 +381,9 @@ class GoogleCalendarProvider(SchedulerProviderBase):
 
         try:
             service = self._get_service()
+            timezone_name = resolve_timezone_name(kwargs.get("timezone"))
+            start = localize_wall_time(start, timezone_name)
+            end = localize_wall_time(end, timezone_name)
 
             google_events = await service.list_events(
                 start=start,
@@ -502,7 +504,8 @@ class GoogleCalendarProvider(SchedulerProviderBase):
                 end=end,
                 description=description,
                 location=location,
-                attendees=kwargs.get("attendees")
+                attendees=kwargs.get("attendees"),
+                timezone=resolve_timezone_name(kwargs.get("timezone")),
             )
 
             return self._google_event_to_scheduler_event(google_event)

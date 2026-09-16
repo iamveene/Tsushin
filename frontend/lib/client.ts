@@ -981,6 +981,9 @@ export interface Agent {
   max_agentic_rounds?: number | null
   max_agentic_loop_bytes?: number | null
 
+  // Localization: per-agent IANA timezone (null = system default America/Sao_Paulo)
+  timezone?: string | null
+
   // v0.7.0 Agent Teams
   is_team_member?: boolean
   current_team_id?: number | null
@@ -5799,6 +5802,7 @@ export const api = {
     model_provider?: string
     model_name?: string
     provider_instance_id?: number | null
+    timezone?: string | null
     is_active?: boolean
     is_default?: boolean
   }): Promise<Agent> {
@@ -5828,6 +5832,7 @@ export const api = {
     whatsapp_integration_id: number | null
     telegram_integration_id: number | null
     webhook_integration_id: number | null
+    timezone: string | null
     is_active: boolean
     is_default: boolean
     vector_store_instance_id: number | null

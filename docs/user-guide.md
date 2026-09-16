@@ -320,6 +320,12 @@ Per-agent settings that override your tenant's global defaults. Leave blank to i
 | **Context Message Count** | How many recent group messages the agent reads for context. |
 | **Context Character Limit** | Maximum character length of the context window. |
 
+### Timezone
+
+Each agent has a **Timezone** (default **America/Sao Paulo**). The agent reads "now" and relative reminders like *"remind me in 15 minutes"* or *"tomorrow at 9am"* in this zone, so scheduling matches the wall-clock you expect. Change it only if this agent serves users in a different timezone. Set it in **Studio > Agents > Configuration > Timezone**.
+
+> If you use the **Google Calendar** scheduler provider, also set that calendar integration's timezone to match, so events land at the intended local time.
+
 ### Cloning Agents
 
 Use the **Clone** action on the Agents list to duplicate an agent with all configuration -- system prompt, persona, skills, memory settings, and channel bindings.

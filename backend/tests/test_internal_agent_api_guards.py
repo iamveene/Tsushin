@@ -39,6 +39,10 @@ from api.v1.routes_studio import (  # noqa: E402
     save_builder_data,
 )
 from api.v1.routes_agents import AgentUpdateRequest, get_agent, list_agents, update_agent  # noqa: E402
+from api.routes_agents import (  # noqa: E402
+    get_agent as get_agent_internal,
+    list_agents as list_agents_internal,
+)
 from api.v1.routes_chat import ChatRequest, send_chat_message  # noqa: E402
 from models import (  # noqa: E402
     Agent,
@@ -108,7 +112,15 @@ def _ctx(db, tenant_id: str = "tenant-a") -> TenantContext:
     return TenantContext(user=_user(tenant_id), db=db)
 
 
-def _seed_agent(db, *, agent_id: int, name: str, tenant_id: str = "tenant-a", is_internal: bool = False) -> Agent:
+def _seed_agent(
+    db,
+    *,
+    agent_id: int,
+    name: str,
+    tenant_id: str = "tenant-a",
+    is_internal: bool = False,
+    timezone: str | None = None,
+) -> Agent:
     contact = Contact(id=agent_id + 1000, tenant_id=tenant_id, friendly_name=name, role="agent")
     agent = Agent(
         id=agent_id,
@@ -121,6 +133,7 @@ def _seed_agent(db, *, agent_id: int, name: str, tenant_id: str = "tenant-a", is
         enabled_channels=["playground"],
         is_active=True,
         is_internal=is_internal,
+        timezone=timezone,
     )
     db.add(contact)
     db.add(agent)
@@ -154,7 +167,12 @@ def _seed_permission(
 
 @pytest.mark.asyncio
 async def test_public_v1_agent_list_hides_internal_agents(db_session):
-    _seed_agent(db_session, agent_id=1, name="Visible Agent")
+    _seed_agent(
+        db_session,
+        agent_id=1,
+        name="Visible Agent",
+        timezone="America/New_York",
+    )
     _seed_agent(db_session, agent_id=2, name="Hidden Coordinator", is_internal=True)
 
     response = await list_agents(
@@ -169,6 +187,37 @@ async def test_public_v1_agent_list_hides_internal_agents(db_session):
 
     assert [row["id"] for row in response["data"]] == [1]
     assert response["meta"]["total"] == 1
+    assert response["data"][0]["timezone"] == "America/New_York"
+
+    detail = await get_agent(agent_id=1, db=db_session, caller=_caller())
+    assert detail["timezone"] == "America/New_York"
+
+
+def test_internal_agent_list_and_get_return_timezone(db_session):
+    _seed_agent(
+        db_session,
+        agent_id=1,
+        name="Timezone Agent",
+        timezone="Europe/Lisbon",
+    )
+    ctx = _ctx(db_session)
+    current_user = _user()
+
+    agents = list_agents_internal(
+        active_only=False,
+        db=db_session,
+        current_user=current_user,
+        ctx=ctx,
+    )
+    detail = get_agent_internal(
+        agent_id=1,
+        db=db_session,
+        current_user=current_user,
+        ctx=ctx,
+    )
+
+    assert agents[0].timezone == "Europe/Lisbon"
+    assert detail.timezone == "Europe/Lisbon"
 
 
 @pytest.mark.asyncio

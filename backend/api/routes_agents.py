@@ -130,6 +130,22 @@ class TonePresetUpdate(BaseModel):
 
 # ==================== Agent Schemas ====================
 
+
+def _validate_agent_timezone(v: Optional[str]) -> Optional[str]:
+    """Validate an IANA timezone string (e.g. 'America/Sao_Paulo'). null/empty → None."""
+    if v is None:
+        return v
+    v = v.strip()
+    if not v:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(v)
+    except Exception:
+        raise ValueError(f"Invalid IANA timezone: '{v}'")
+    return v
+
+
 class AgentResponse(BaseModel):
     id: int
     contact_id: int
@@ -173,6 +189,9 @@ class AgentResponse(BaseModel):
     # v0.7.0 Track F: bounded outer agentic loop (BUG-716 — surface in UI)
     max_agentic_rounds: Optional[int] = None
     max_agentic_loop_bytes: Optional[int] = None
+
+    # Localization: per-agent IANA timezone (null = system default)
+    timezone: Optional[str] = None
 
     is_active: bool
     is_default: bool
@@ -246,8 +265,16 @@ class AgentCreate(BaseModel):
     max_agentic_rounds: Optional[int] = Field(None, ge=1, le=8, description="Per-agent max agentic loop rounds (1-8). null uses platform bounds.")
     max_agentic_loop_bytes: Optional[int] = Field(None, ge=512, le=131072, description="Per-agent byte cap for the agentic loop scratchpad (default 8192).")
 
+    # Localization: per-agent IANA timezone
+    timezone: Optional[str] = Field(None, description="Agent IANA timezone (e.g. 'America/Sao_Paulo'). null uses system default. Drives the agent's injected clock and reminder parsing.")
+
     is_active: bool = Field(default=True)
     is_default: bool = Field(default=False)
+
+    @field_validator('timezone')
+    @classmethod
+    def _check_create_timezone(cls, v):
+        return _validate_agent_timezone(v)
 
 
 class AgentUpdate(BaseModel):
@@ -299,8 +326,16 @@ class AgentUpdate(BaseModel):
     max_agentic_rounds: Optional[int] = Field(None, ge=1, le=8, description="Per-agent max agentic loop rounds (1-8). null uses platform bounds.")
     max_agentic_loop_bytes: Optional[int] = Field(None, ge=512, le=131072, description="Per-agent byte cap for the agentic loop scratchpad (default 8192).")
 
+    # Localization: per-agent IANA timezone
+    timezone: Optional[str] = Field(None, description="Agent IANA timezone (e.g. 'America/Sao_Paulo'). null uses system default.")
+
     is_active: Optional[bool] = None
     is_default: Optional[bool] = None
+
+    @field_validator('timezone')
+    @classmethod
+    def _check_update_timezone(cls, v):
+        return _validate_agent_timezone(v)
 
 
 # ==================== Tone Preset Routes ====================
@@ -588,6 +623,7 @@ def list_agents(
             # v0.7.0 Track F (BUG-710 close-out): expose agentic-loop bounds in list response
             "max_agentic_rounds": getattr(agent, "max_agentic_rounds", None),
             "max_agentic_loop_bytes": getattr(agent, "max_agentic_loop_bytes", None),
+            "timezone": getattr(agent, "timezone", None),
 
             "created_at": agent.created_at,
             "updated_at": agent.updated_at
@@ -730,6 +766,7 @@ def get_agent(
         # v0.7.0 Track F (BUG-710 close-out): expose agentic-loop bounds in GET response
         "max_agentic_rounds": getattr(agent, "max_agentic_rounds", None),
         "max_agentic_loop_bytes": getattr(agent, "max_agentic_loop_bytes", None),
+        "timezone": getattr(agent, "timezone", None),
 
         "created_at": agent.created_at,
         "updated_at": agent.updated_at
@@ -987,6 +1024,7 @@ def update_agent(
         "vector_store_instance_id", "vector_store_mode",
         # BUG-710: bounded agentic loop knobs (column existed; PUT path was dropping them).
         "max_agentic_rounds", "max_agentic_loop_bytes",
+        "timezone",
         "is_active", "is_default",
     }
     update_data = agent.model_dump(exclude_unset=True)
