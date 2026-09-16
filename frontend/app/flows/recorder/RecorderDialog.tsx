@@ -48,6 +48,11 @@ interface RecorderDialogProps {
   // When true, the in-dialog URL bar is hidden (the parent already
   // collected the URL upstream). Start/Go still work, driven by `url`.
   hideUrlBar?: boolean
+  // Skip the explicit "Start recording" click and spawn the session as
+  // soon as the dialog opens with a non-empty URL. Defaults to
+  // `hideUrlBar` — when the parent already collected the URL upstream
+  // (the step wizard's record stage), the extra click is pure friction.
+  autoStart?: boolean
 }
 
 export default function RecorderDialog({
@@ -59,7 +64,11 @@ export default function RecorderDialog({
   url,
   onUrlChange,
   hideUrlBar,
+  autoStart,
 }: RecorderDialogProps) {
+  // When the parent pre-collected the URL (hideUrlBar), auto-recording is
+  // the sensible default — `autoStart` lets a caller force it either way.
+  const shouldAutoStart = autoStart ?? hideUrlBar
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [isClosing, setIsClosing] = useState(false)
   // Controlled when `url` is defined; otherwise we own the value locally
@@ -111,6 +120,18 @@ export default function RecorderDialog({
   // Hold the latest frame outside React state to avoid re-rendering the whole
   // dialog at 10 fps — StreamCanvas reads through this ref via the `framePort`.
   const framePortRef = useRef<{ latestFrame: RecorderFrame | null }>({ latestFrame: null })
+  // One-shot guard for auto-start. A ref (not state) so it survives the
+  // StrictMode double-invoke of effects and never re-fires on URL edits.
+  const autoStartedRef = useRef(false)
+  // Session creation can take ~90s. Track the currently-authoritative attempt
+  // so a response that arrives after close/unmount is torn down immediately
+  // instead of leaking a tenant recorder slot.
+  const startAttemptRef = useRef(0)
+  const mountedRef = useRef(true)
+  const isOpenRef = useRef(isOpen)
+  const sessionIdRef = useRef<string | null>(sessionId)
+  isOpenRef.current = isOpen
+  sessionIdRef.current = sessionId
 
   const handleFrame = useCallback((frame: RecorderFrame) => {
     framePortRef.current.latestFrame = frame
@@ -124,7 +145,7 @@ export default function RecorderDialog({
     setBootError(message)
   }, [])
 
-  const { status, viewport, send, close } = useRecorderSocket({
+  const { status, viewport, send } = useRecorderSocket({
     sessionId: sessionId || '',
     enabled: isOpen && !!sessionId,
     onFrame: handleFrame,
@@ -132,14 +153,33 @@ export default function RecorderDialog({
     onError: handleSocketError,
   })
 
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      startAttemptRef.current += 1
+      const activeSessionId = sessionIdRef.current
+      if (activeSessionId) {
+        api.deleteRecorderSession(activeSessionId).catch(() => { /* janitor fallback */ })
+      }
+    }
+  }, [])
+
   // Reset all state when the dialog is closed externally.
   useEffect(() => {
     if (!isOpen) {
+      // Invalidate an in-flight create request. If it returns later,
+      // handleStart deletes the late-created backend session.
+      startAttemptRef.current += 1
       setSessionId(null)
       setEvents([])
       setBootError(null)
       setMarkerMode(null)
+      setStarting(false)
+      setStartSeconds(0)
       framePortRef.current.latestFrame = null
+      // Re-arm auto-start so re-opening the dialog spawns a fresh session.
+      autoStartedRef.current = false
     }
   }, [isOpen])
 
@@ -174,19 +214,53 @@ export default function RecorderDialog({
   }, [isClosing, onClose, sessionId])
 
   const handleStart = useCallback(async () => {
+    const attempt = startAttemptRef.current + 1
+    startAttemptRef.current = attempt
     setBootError(null)
     setStarting(true)
     try {
       const resp = await api.startRecorderSession({
         initial_url: urlInput.trim() || undefined,
       })
+      if (!mountedRef.current || !isOpenRef.current || startAttemptRef.current !== attempt) {
+        // The modal closed (or a newer start won) while Chromium was spawning.
+        // Do not set React state after close; release the server-side slot.
+        await api.deleteRecorderSession(resp.session_id).catch(() => { /* janitor fallback */ })
+        return
+      }
+      sessionIdRef.current = resp.session_id
       setSessionId(resp.session_id)
     } catch (err: any) {
-      setBootError(err?.message || 'Failed to start session')
+      if (mountedRef.current && isOpenRef.current && startAttemptRef.current === attempt) {
+        setBootError(err?.message || 'Failed to start session')
+      }
     } finally {
-      setStarting(false)
+      if (mountedRef.current && isOpenRef.current && startAttemptRef.current === attempt) {
+        setStarting(false)
+      }
     }
   }, [urlInput])
+
+  // Auto-start: when the URL was pre-collected upstream, spawn the session
+  // as soon as the dialog opens — the extra "Start recording" click is pure
+  // friction. The ref is set synchronously BEFORE awaiting so the StrictMode
+  // double-invoke can't fire two sessions, and so URL edits never re-trigger.
+  // Reuses handleStart, so the BUG-781 "Starting session… Ns" spinner shows
+  // exactly as it does for a manual start.
+  useEffect(() => {
+    if (!isOpen || !shouldAutoStart) return
+    if (autoStartedRef.current) return
+    if (sessionId || starting) return
+    if (!urlInput.trim()) return
+    // Defer one tick so React StrictMode's first setup/cleanup pass cancels
+    // before any request is sent. The second setup starts exactly one session.
+    const timer = window.setTimeout(() => {
+      if (!mountedRef.current || !isOpenRef.current || autoStartedRef.current) return
+      autoStartedRef.current = true
+      void handleStart()
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [isOpen, shouldAutoStart, sessionId, starting, urlInput, handleStart])
 
   // Live elapsed counter while the inner Chromium spins up (BUG-781).
   useEffect(() => {
@@ -225,23 +299,23 @@ export default function RecorderDialog({
   }, [send])
 
   const handleRectMark = useCallback((rect: {
-    x: number; y: number; width: number; height: number; kind: 'captcha' | 'extract' | 'timeline'
+    x: number; y: number; width: number; height: number; kind: 'captcha' | 'extract' | 'area'
   }) => {
     if (rect.kind === 'captcha') {
       send({ type: 'marker.captcha', x: rect.x, y: rect.y, width: rect.width, height: rect.height })
       setMarkerMode(null)
       return
     }
-    if (rect.kind === 'timeline') {
-      // Structured timeline capture — no naming needed. The compiler emits a
-      // fixed `extract_tracking` execute_script parser + a normalize
-      // data_transform + (if a recipient is set) the canonical notification.
-      // One drag over the event history and the whole pipeline is wired.
+    if (rect.kind === 'area') {
+      // Generic region capture — no naming needed. The compiler emits a
+      // fixed `capture_source` execute_script parser + a `capture`
+      // data_transform that exposes the region as {{capture.data_preview.*}}.
+      // One drag over any card/list/panel and the whole pipeline is wired.
       send({
         type: 'marker.extract',
         x: rect.x, y: rect.y, width: rect.width, height: rect.height,
-        as: 'tracking',
-        capture_kind: 'timeline',
+        as: 'capture',
+        capture_kind: 'area',
       })
       setMarkerMode(null)
       return
@@ -434,8 +508,8 @@ export default function RecorderDialog({
               <span className="text-slate-500">①</span> click the target field &amp; type or paste its value (e.g. a tracking code){'  '}
               <span className="text-slate-500">②</span> when the page shows a captcha, click{' '}
               <span className="text-amber-300">▣ Mark captcha</span> and drag a box over the captcha <em>image</em> (the squiggly text), then click into its answer box{'  '}
-              <span className="text-slate-500">③</span> submit, then click{' '}
-              <span className="text-cyan-300">📋 Capture timeline</span> and drag over the results / event list{'  '}
+              <span className="text-slate-500">③</span> when the content you want is on screen, click{' '}
+              <span className="text-cyan-300">📋 Capture area</span> and drag over any region you want to capture (a card, list, or results panel){'  '}
               <span className="text-slate-500">④</span> Save — then add a Notification step to send the captured data.
             </div>
             {agenticExpanded && (
@@ -450,9 +524,10 @@ export default function RecorderDialog({
             <div className="flex items-start gap-2 text-[11px] text-slate-500 rounded-md border border-slate-700/60 bg-slate-800/30 px-2.5 py-1.5">
               <span className="text-cyan-400/80 shrink-0">ⓘ</span>
               <span>
-                <span className="text-slate-400">📋 Capture timeline</span> exposes the parsed tracking object as the{' '}
-                <code className="text-cyan-300/90">{'{{normalize_tracking.data_preview.*}}'}</code> variable
-                (<span className="text-slate-400">latest_status, latest_at, latest_location, event_count, latest_event_key, tracking_code</span>).
+                <span className="text-slate-400">📋 Capture area</span> exposes the captured region as the{' '}
+                <code className="text-cyan-300/90">{'{{capture.data_preview.*}}'}</code> variable
+                (<span className="text-slate-400">text, title, items, item_count, captured_at</span> — plus{' '}
+                <span className="text-slate-400">latest_status, latest_at, latest_location, event_count</span> when dated rows are detected).
                 {' '}To send it, add a <span className="text-slate-300">Notification</span> step after this recording and reference those fields.
               </span>
             </div>

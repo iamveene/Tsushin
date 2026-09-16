@@ -283,9 +283,9 @@ async def _handle_client_message(
         }
         if mtype == "marker.extract":
             payload["as"] = str(msg.get("as", "")).strip() or "captured_value"
-            # "timeline" routes the compiler to a structured execute_script
-            # parser (event list + dedupe key) instead of a plain innerText
-            # extract — see event_compiler.compile_events_into_nodes.
+            # "area" routes the compiler to a structured execute_script parser
+            # (region text/title/items + dedupe key) instead of a plain
+            # innerText extract — see event_compiler.compile_events_into_nodes.
             capture_kind = str(msg.get("capture_kind", "")).strip()
             if capture_kind:
                 payload["capture_kind"] = capture_kind
