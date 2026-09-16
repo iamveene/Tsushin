@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Browser Recorder capture safety and lifecycle hardening (2026-09-16)
+
+- **Generic Capture area.** Replaced the Correios-oriented **Capture timeline** control with **Capture area** for any card, list, panel, or results region. New recordings emit `capture_kind: "area"` while the compiler accepts the legacy `"timeline"` value for compatibility. The generated parser exposes `{{capture.data_preview.*}}` with `text`, `title`, `items`, `item_count`, `captured_at`, and `dedupe_key`; dated rows additionally expose `events`, `latest_status`, `latest_at`, `latest_location`, `event_count`, and `latest_event_key`.
+- **Bounded capture scope.** Structured parsing now stays inside the marked root, promoting a marked leaf only to its nearest explicit semantic card/panel/result/region. It never falls back to the document, a provider-specific container, or a sibling timeline, preventing unrelated page content from being swept into the capture. Missing and document-root selectors fail closed.
+- **Plaintext passwords fail closed.** All recorder compile shapes reject unresolved `_needs_vault` rows with a sanitized HTTP 422. The response never includes the captured value; valid `op://` and `pvh_` references continue to compile normally.
+- **Reliable auto-start and teardown.** The guided Browser Automation wizard now starts recording automatically after the URL stage. StrictMode cannot double-spawn a session, closing or unmounting invalidates in-flight creates, and any late-created backend session is deleted immediately so it cannot consume a tenant recorder slot.
+- **Regression coverage.** The focused recorder suite covers generic/dated regions in a real Playwright DOM, sibling and page-wide privacy boundaries, legacy marker compatibility, password-vault enforcement and sanitized API errors, and late-session lifecycle cleanup.
+
 ### Fixed — WhatsApp 405 `Client outdated` ingestion outage (2026-07-29)
 
 Voice notes and all other inbound WhatsApp messages stopped reaching Tsushin after WhatsApp rejected the runtime bridge with `Client outdated (405)`. The bridge REST process stayed alive, so Docker could look healthy while the WhatsApp socket repeatedly reconnected without authentication; media never reached the configured ASR provider.
@@ -16,6 +24,15 @@ Voice notes and all other inbound WhatsApp messages stopped reaching Tsushin aft
 - Added a regression contract test to both Go modules proving that a runtime WhatsApp Web version update also changes `BaseClientPayload.UserAgent.AppVersion`.
 - Fixed the follow-on media regression exposed by that upgrade: current `whatsmeow` downloads through `GetDirectPath()` instead of the stored absolute URL. Both bridges now preserve WhatsApp's signed `ccb`/`oh`/`oe` query when deriving the direct path; stripping it produced CDN `403` responses and left fresh audio without a file for transcription. Regression tests cover absolute media URLs, already-normalized direct paths, and byte-preservation of percent-encoded signature values.
 - Deployment note: rebuilding `tsushin/whatsapp-mcp:latest` does not change an already-created container's immutable image. Existing affected instances must be recreated through `MCPContainerManager` while preserving their `/app/store` session bind mount; a normal restart is insufficient and `/logout` must not be used.
+
+### Fixed — BUG-791: reminders scheduled ~3h late (agent clock ran in UTC) + per-agent timezone (2026-07-06)
+
+A relative reminder ("me lembre … em 15 minutos") sent at 17:17 BRT was created for **20:32** — exactly the UTC offset (3h) late — and would have *fired* 3h late, not merely displayed wrong. **Root cause:** the agent's injected "current time" used a naive `datetime.now()` (`backend/agent/agent_service.py`), and the backend container runs in **UTC** (`TZ` unset), so the LLM was told "now = 20:17" instead of "17:17 BRT"; it then computed "+15 min → 20:32" and the reminder-create path (`flows_skill.py`) stored that as local wall-clock. **No version bump.**
+
+- **Fix (root cause):** the injected date/time is now computed in the **agent's timezone**, and the prompt names the zone so relative/absolute times are interpreted and emitted in it (`agent_service.py`).
+- **New per-agent `timezone` setting** (IANA string, e.g. `America/Sao_Paulo`; NULL = system default `America/Sao_Paulo`). Adds the `agent.timezone` column (Alembic `0104`, additive/nullable — metadata-only on Postgres), a `DEFAULT_AGENT_TIMEZONE` constant, threading through `AgentRouter.get_agent_config`/`_agent_to_config`, and **read-site defaults** so correctness holds even on config paths that don't thread the value. `flows_skill` reminder parsing/creation (`_execute_tool_create`/`_update`, `_parse_event_*`) now resolves the agent tz instead of a hardcoded `America/Sao_Paulo` (4 sites). API: `timezone` on `AgentCreate`/`AgentUpdate`/`AgentResponse` (validated via `zoneinfo`) + the PUT allowlist. **Frontend:** a **Timezone** selector in Studio → Agent configuration.
+- **Note:** the **Google Calendar** provider still stores events in the *integration's* timezone (`google_integrations.timezone`); keep it aligned with the agent's zone for that provider.
+- **Verified locally:** migration `0103→0104` applies clean; in-container the injected clock flips from `21:21` (UTC) to `18:21` (America/Sao_Paulo), and a per-agent override resolves correctly (NY → `17:21`) with fallback on missing/invalid; OpenAPI exposes `timezone` on all three agent schemas; frontend `next build` clean.
 
 ### Added — GitHub commits → WhatsApp polling trigger (2026-06-25)
 

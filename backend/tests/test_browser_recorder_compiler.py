@@ -1,23 +1,28 @@
 """Unit tests for the browser-recorder event compiler.
 
-These tests are pure — no Playwright, no DB. They feed synthetic
-RecordedEvent sequences into compile_events() and assert the output shape
-matches what BrowserAutomationStepHandler reads.
+Most tests are pure and feed synthetic RecordedEvent sequences into the
+compiler. Capture-parser privacy tests execute the generated JavaScript in a
+real Playwright DOM when the repository's frontend test runtime is available.
 
 Reference shape: the Correios postal-tracking flow described in
 .private/BROWSER_RECORDER_RESEARCH.md §2.
 """
 
+import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+FRONTEND_DIR = BACKEND_DIR.parent / "frontend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from browser_recorder.event_compiler import (  # noqa: E402
+    RecorderCompileError,
     compile_events,
     compile_events_into_group,
     compile_events_into_nodes,
@@ -203,7 +208,7 @@ def test_extract_as_is_slugified():
 # ---------------------------------------------------------------------------
 
 
-def test_password_field_emits_needs_vault_marker():
+def test_password_field_without_vault_fails_closed():
     events = [
         RecordedEvent("navigate", {"url": "https://example.com/login"}),
         RecordedEvent("fill", {
@@ -212,11 +217,15 @@ def test_password_field_emits_needs_vault_marker():
             "field_meta": {"tag": "input", "name": "password", "type": "password"},
         }),
     ]
-    config = compile_events(events)
-    fill = next(s for s in config["selectors"] if s["action"] == "fill")
-    # The compiler refuses to silently emit a password — it marks the row
-    # so the API/UI layer rejects the compile until vault is wired.
-    assert fill.get("_needs_vault") is True
+    for compile_call in (
+        lambda: compile_events(events),
+        lambda: compile_events_into_nodes(events),
+        lambda: compile_events_into_group(events, recording_id="unsafe"),
+    ):
+        with pytest.raises(RecorderCompileError, match="Password Vault") as exc:
+            compile_call()
+        # The actionable error must never echo the captured credential.
+        assert "leaked-plaintext-pw" not in str(exc.value)
 
 
 def test_marker_vault_swaps_plaintext_for_handle():
@@ -914,12 +923,18 @@ def test_bug776_auto_inserts_wait_for_between_captcha_and_extract():
 
 
 # ---------------------------------------------------------------------------
-# Structured "event timeline" capture (BUG-779/780)
+# Generic region / "Capture area" capture (BUG-779/780; generalized from the
+# Correios-specific "Capture timeline")
 # ---------------------------------------------------------------------------
 
 
-def _events_timeline_shaped():
-    """Correios recording where the result region is marked as a timeline."""
+def _events_area_shaped():
+    """Correios recording where the result region is marked with "Capture area".
+
+    A captcha-gated page that still holds a dated timeline — exercises both the
+    captcha success-selector wiring and the timeline-compat block of the
+    generic parser.
+    """
     return [
         RecordedEvent("navigate", {"url": "https://rastreamento.correios.com.br/app/index.php"}),
         RecordedEvent("load", {"url": "https://rastreamento.correios.com.br/app/index.php"}),
@@ -938,32 +953,170 @@ def _events_timeline_shaped():
             "selector": "button#b-pesquisar", "meta": {"tag": "button", "id": "b-pesquisar"},
         }),
         RecordedEvent("marker.extract", {
-            "selector": "#tabs-rastreamento", "as": "tracking", "capture_kind": "timeline",
+            "selector": "#tabs-rastreamento", "as": "capture", "capture_kind": "area",
         }),
     ]
 
 
-def test_timeline_capture_emits_execute_script_with_parser():
-    children = compile_events_into_nodes(_events_timeline_shaped())
+def _events_area_card_shaped():
+    """Non-Correios recording: log into a dashboard and capture a content card.
+
+    No captcha, no dated rows — the generic-region case (e.g. an "Insights de
+    IA" card on a scheduler dashboard).
+    """
+    return [
+        RecordedEvent("navigate", {"url": "https://scheduler.example.test/dashboard"}),
+        RecordedEvent("load", {"url": "https://scheduler.example.test/dashboard"}),
+        RecordedEvent("fill", {
+            "selector": "input#email", "value": "admin@scheduler.local",
+            "field_meta": {"tag": "input", "id": "email", "type": "email"},
+        }),
+        RecordedEvent("fill", {
+            "selector": "input#password", "value": "secret",
+            "field_meta": {"tag": "input", "id": "password", "type": "password"},
+        }),
+        RecordedEvent("marker.vault", {
+            "selector": "input#password",
+            "reference": "op://Scheduler/Admin/password",
+        }),
+        RecordedEvent("click", {
+            "selector": "button[type=\"submit\"]", "meta": {"tag": "button", "type": "submit"},
+        }),
+        RecordedEvent("marker.extract", {
+            "selector": ".insights-card", "as": "capture", "capture_kind": "area",
+        }),
+    ]
+
+
+def _compiled_area_script(selector: str = "#selected") -> str:
+    children = compile_events_into_nodes([
+        RecordedEvent("navigate", {"url": "https://example.test/dashboard"}),
+        RecordedEvent("marker.extract", {
+            "selector": selector,
+            "as": "capture",
+            "capture_kind": "area",
+        }),
+    ])
+    execute = next(
+        child for child in children
+        if (child.get("config_json") or {}).get("tool_action") == "execute_script"
+    )
+    return execute["config_json"]["tool_arguments"]["script"]
+
+
+def _run_capture_parser_in_dom(script: str, html: str) -> dict:
+    """Execute the generated parser in Chromium, not via source assertions."""
+    node = shutil.which("node")
+    playwright_module = FRONTEND_DIR / "node_modules" / "playwright"
+    if not node or not playwright_module.exists():
+        pytest.skip("frontend Playwright runtime is not installed")
+    runner = r"""
+const fs = require('fs');
+const { chromium } = require('playwright');
+(async () => {
+  const input = JSON.parse(fs.readFileSync(0, 'utf8'));
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  await page.setContent(input.html);
+  const result = await page.evaluate(`(${input.script})()`);
+  await browser.close();
+  process.stdout.write(JSON.stringify(result));
+})().catch((error) => {
+  console.error(error && error.stack ? error.stack : String(error));
+  process.exit(1);
+});
+"""
+    completed = subprocess.run(
+        [node, "-e", runner],
+        cwd=FRONTEND_DIR,
+        input=json.dumps({"script": script, "html": html}),
+        text=True,
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+    if completed.returncode != 0:
+        pytest.fail(f"capture parser DOM run failed: {completed.stderr}")
+    return json.loads(completed.stdout)
+
+
+def test_area_parser_stays_within_selected_semantic_card():
+    result = _run_capture_parser_in_dom(
+        _compiled_area_script("#selected"),
+        """
+        <html><head><title>Dashboard</title></head><body><main>
+          <section class="account-card">
+            <h2>Selected account</h2><span id="selected">Balance $10</span>
+          </section>
+          <section class="account-card">
+            <h2>Other account</h2><span>Private token ABC</span>
+          </section>
+          <section class="timeline"><ul>
+            <li><strong>Unrelated event</strong><span>01/02/2026 12:30</span></li>
+          </ul></section>
+        </main></body></html>
+        """,
+    )
+    rendered = json.dumps(result)
+    assert result["text"] == "Selected account Balance $10"
+    assert result["title"] == "Selected account"
+    assert "Other account" not in rendered
+    assert "Private token" not in rendered
+    assert "Unrelated event" not in rendered
+    assert result["items"] == []
+    assert "events" not in result
+
+
+def test_area_parser_populates_items_for_undated_generic_list():
+    result = _run_capture_parser_in_dom(
+        _compiled_area_script("#selected"),
+        """
+        <html><head><title>Tasks</title></head><body><main>
+          <section id="selected" class="task-card">
+            <h2>Tasks</h2><ul><li>Alpha</li><li>Beta</li></ul>
+          </section>
+        </main></body></html>
+        """,
+    )
+    assert result["items"] == ["Alpha", "Beta"]
+    assert result["item_count"] == 2
+    assert "events" not in result
+
+
+def test_area_capture_emits_execute_script_with_parser():
+    children = compile_events_into_nodes(_events_area_shaped())
     es = [c for c in children if (c["config_json"] or {}).get("tool_action") == "execute_script"]
-    assert len(es) == 1, "timeline capture should compile to exactly one execute_script node"
+    assert len(es) == 1, "area capture should compile to exactly one execute_script node"
     cfg = es[0]["config_json"]
-    assert cfg.get("output_alias") == "extract_tracking"
+    assert cfg.get("output_alias") == "capture_source"
     script = (cfg.get("tool_arguments") or {}).get("script") or ""
-    # The recorded tracking code is injected (never hardcoded elsewhere).
-    assert "AD468811215BR" in script
     # Deterministic FNV-1a dedupe + 28-char status slug = the canonical key shape.
     assert "16777619" in script and "slice(0, 28)" in script
-    # No plain `extract` (innerText) node for the timeline region.
+    # No plain `extract` (innerText) node for the captured region.
     assert not any(
         (c["config_json"] or {}).get("tool_action") == "extract" for c in children
     )
 
 
-def test_timeline_wait_for_is_non_empty():
-    children = compile_events_into_nodes(_events_timeline_shaped())
+def test_area_parser_output_is_generic_not_correios():
+    """The parser returns generic region fields and is no longer hardcoded to
+    Correios postal tracking (no provider/record_kind/Correios title)."""
+    children = compile_events_into_nodes(_events_area_shaped())
+    es = next(c for c in children if (c["config_json"] or {}).get("tool_action") == "execute_script")
+    script = es["config_json"]["tool_arguments"]["script"]
+    # Generic region keys every capture exposes.
+    for key in ("text", "title", "item_count", "captured_at", "dedupe_key"):
+        assert key in script, f"expected generic key {key!r} in parser"
+    # No Correios-specific output remains.
+    assert "postal_tracking_status" not in script
+    assert "'correios'" not in script and '"correios"' not in script
+    assert "Correios " not in script
+
+
+def test_area_wait_for_is_non_empty():
+    children = compile_events_into_nodes(_events_area_shaped())
     waits = [c for c in children if (c["config_json"] or {}).get("tool_action") == "wait_for"]
-    assert waits, "a wait_for should gate the timeline parse against the post-submit reload"
+    assert waits, "a wait_for should gate the capture parse against the post-submit reload"
     for w in waits:
         sel = (w["config_json"]["selectors"][0] or {}).get("selector") or ""
         assert sel.strip(), "wait_for selector must never be empty (BUG-780)"
@@ -972,43 +1125,120 @@ def test_timeline_wait_for_is_non_empty():
     assert actions.index("solve_captcha") < actions.index("wait_for") < actions.index("execute_script")
 
 
-def test_timeline_group_wires_normalize_variable_only():
-    # Decoupled recorder: a "Capture timeline" recording exposes the parsed
-    # tracking object as the reusable `normalize_tracking` variable and must
-    # NOT wire a notification — sending is a separate, user-added Notification
-    # flow step that references {{normalize_tracking.data_preview.*}}.
-    group = compile_events_into_group(_events_timeline_shaped(), recording_id="rec1")
+def test_captcha_gated_generic_area_preserves_marked_root_everywhere():
+    events = [
+        RecordedEvent("navigate", {"url": "https://portal.example.test/"}),
+        RecordedEvent("marker.captcha", {
+            "selector": "img#captcha", "meta": {"tag": "img", "id": "captcha"},
+        }),
+        RecordedEvent("fill", {
+            "selector": "input#captcha-answer", "value": "XXXXXX",
+            "field_meta": {"tag": "input", "id": "captcha-answer"},
+        }),
+        RecordedEvent("click", {
+            "selector": "button#submit", "meta": {"tag": "button", "id": "submit"},
+        }),
+        RecordedEvent("marker.extract", {
+            "selector": ".insights-card", "as": "capture", "capture_kind": "area",
+        }),
+    ]
+    children = compile_events_into_nodes(events)
+    captcha = next(c for c in children if c["config_json"].get("tool_action") == "solve_captcha")
+    wait = next(c for c in children if c["config_json"].get("tool_action") == "wait_for")
+    execute = next(c for c in children if c["config_json"].get("tool_action") == "execute_script")
+    assert captcha["config_json"]["tool_arguments"]["success_selector"] == ".insights-card"
+    assert wait["config_json"]["selectors"][0]["selector"] == ".insights-card"
+    assert execute["config_json"]["selectors"]["extraction_root"] == ".insights-card"
+    assert "#tabs-rastreamento" not in json.dumps([captcha, wait, execute])
+
+
+@pytest.mark.parametrize("selector", [None, "", "body", "html", "*"])
+def test_area_capture_without_specific_selector_fails_closed(selector):
+    events = [
+        RecordedEvent("navigate", {"url": "https://example.test/"}),
+        RecordedEvent("marker.extract", {
+            "selector": selector, "as": "capture", "capture_kind": "area",
+        }),
+    ]
+    with pytest.raises(RecorderCompileError, match="specific page region"):
+        compile_events_into_group(events, recording_id="unresolved")
+
+
+def test_legacy_timeline_marker_normalizes_to_area_capture():
+    events = [
+        RecordedEvent("navigate", {"url": "https://example.test/"}),
+        RecordedEvent("marker.extract", {
+            "selector": ".result-card", "as": "capture", "capture_kind": "timeline",
+        }),
+    ]
+    children = compile_events_into_nodes(events)
+    execute = [c for c in children if c["config_json"].get("tool_action") == "execute_script"]
+    assert len(execute) == 1
+    assert execute[0]["config_json"]["selectors"]["extraction_root"] == ".result-card"
+
+
+def test_area_group_wires_capture_variable_only():
+    # Decoupled recorder: a "Capture area" recording exposes the parsed region
+    # as the reusable `capture` variable and must NOT wire a notification —
+    # sending is a separate, user-added Notification flow step that references
+    # {{capture.data_preview.*}}.
+    group = compile_events_into_group(_events_area_shaped(), recording_id="rec1")
     trailing = group.get("trailing_nodes") or []
     types = [t["type"] for t in trailing]
     assert types == ["data_transform"], types
     normalize = trailing[0]
-    assert normalize["name"] == "normalize_tracking"
+    assert normalize["name"] == "capture"
     cfg = normalize["config_json"]
-    assert cfg["source_step"] == "extract_tracking"
+    assert cfg["source_step"] == "capture_source"
     assert cfg["source_path"] == "metadata.result"
-    assert cfg["output_alias"] == "normalize_tracking"
+    assert cfg["output_alias"] == "capture"
     # The recorder no longer emits any notification node.
     assert "notification" not in types
 
 
-def test_no_timeline_means_no_trailing_nodes():
-    # Plain extract (no capture_kind) must NOT auto-wire the normalize step.
+def test_area_card_no_captcha_compiles_capture_pipeline():
+    """A non-Correios card capture (no captcha, no dated rows) still emits the
+    wait_for + execute_script + trailing `capture` transform, and never
+    fabricates a captcha success_selector."""
+    children = compile_events_into_nodes(_events_area_card_shaped())
+    names = [c["name"] for c in children]
+    assert "wait_capture_region" in names
+    assert "capture_source" in names
+    # No captcha in this recording → no solve_captcha node at all.
+    assert not any(
+        (c["config_json"] or {}).get("tool_action") == "solve_captcha" for c in children
+    )
+    group = compile_events_into_group(_events_area_card_shaped(), recording_id="rec2")
+    trailing = group.get("trailing_nodes") or []
+    assert [t["name"] for t in trailing] == ["capture"]
+    password_fill = next(
+        c for c in group["child_nodes"]
+        if (c.get("config_json") or {}).get("tool_action") == "fill"
+        and "password" in str((c["config_json"].get("selectors") or [{}])[0].get("selector"))
+    )
+    password_row = password_fill["config_json"]["selectors"][0]
+    assert password_row["value"].startswith("op://")
+    assert '"value": "secret"' not in json.dumps(group)
+
+
+def test_no_area_means_no_trailing_nodes():
+    # Plain extract (no capture_kind) must NOT auto-wire the capture step.
     group = compile_events_into_group(_events_correios_shaped(), recording_id="rec1")
     assert (group.get("trailing_nodes") or []) == []
 
 
-def test_timeline_wires_solve_captcha_success_selector():
-    """solve_captcha gets a success_selector = timeline root so it confirms
+def test_area_wires_solve_captcha_success_selector():
+    """solve_captcha gets a success_selector = capture root so it confirms
     the post-submit results loaded (no false-negative 'not solved')."""
-    children = compile_events_into_nodes(_events_timeline_shaped())
+    children = compile_events_into_nodes(_events_area_shaped())
     captcha = [c for c in children if (c["config_json"] or {}).get("tool_action") == "solve_captcha"]
     assert captcha, "expected a solve_captcha node"
     args = (captcha[0]["config_json"].get("tool_arguments") or {})
     assert args.get("success_selector") == "#tabs-rastreamento"
 
 
-def test_no_timeline_no_forced_success_selector():
-    """Plain (non-timeline) recordings must not gain a fabricated success_selector."""
+def test_no_area_no_forced_success_selector():
+    """Plain (non-area) recordings must not gain a fabricated success_selector."""
     children = compile_events_into_nodes(_events_correios_shaped())
     for c in children:
         cfg = c["config_json"] or {}
@@ -1038,18 +1268,22 @@ def test_bug785_fills_keep_last_full_value_never_concatenate():
     assert fills[0]["value"] == "AD468811215BR"  # not "ADAD468811215BR..." amplified
 
 
-def test_bug786_timeline_parser_root_is_portal_generic():
-    """BUG-786: the timeline parser finds the results region generically (date-
-    bearing rows across common containers), not tied to Correios' hardcoded
-    #tabs-rastreamento / .ship-steps as the only path."""
-    children = compile_events_into_nodes(_events_timeline_shaped())
-    es = next(c for c in children if (c["config_json"] or {}).get("tool_action") == "execute_script")
-    script = es["config_json"]["tool_arguments"]["script"]
-    # generic finder is present
-    assert "ROOT_HINTS" in script
-    assert "rowsIn" in script
-    assert "DATE_RE" in script
-    assert 'class*="result"' in script  # a generic container hint, not just Correios
-    # Correios remains supported as one hint among many (back-compat)
-    assert "#tabs-rastreamento" in script
-    assert ".ship-steps li.step" in script
+def test_bug786_capture_parser_detects_dated_rows_inside_selected_root():
+    result = _run_capture_parser_in_dom(
+        _compiled_area_script("#selected"),
+        """
+        <html><head><title>Tracking</title></head><body><main>
+          <section id="selected" class="tracking-panel">
+            <h2>Shipment</h2><ol>
+              <li class="step"><strong>Delivered</strong><span>1/2/2026 9:05</span></li>
+              <li class="step"><strong>In transit</strong><span>31/1/2026 18:30</span></li>
+            </ol>
+          </section>
+        </main></body></html>
+        """,
+    )
+    assert result["event_count"] == 2
+    assert result["item_count"] == 2
+    assert result["latest_status"] == "Delivered"
+    assert result["latest_at"] == "1/2/2026 9:05"
+    assert result["items"][0].startswith("Delivered")

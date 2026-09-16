@@ -320,6 +320,12 @@ Per-agent settings that override your tenant's global defaults. Leave blank to i
 | **Context Message Count** | How many recent group messages the agent reads for context. |
 | **Context Character Limit** | Maximum character length of the context window. |
 
+### Timezone
+
+Each agent has a **Timezone** (default **America/Sao Paulo**). The agent reads "now" and relative reminders like *"remind me in 15 minutes"* or *"tomorrow at 9am"* in this zone, so scheduling matches the wall-clock you expect. Change it only if this agent serves users in a different timezone. Set it in **Studio > Agents > Configuration > Timezone**.
+
+> If you use the **Google Calendar** scheduler provider, also set that calendar integration's timezone to match, so events land at the intended local time.
+
 ### Cloning Agents
 
 Use the **Clone** action on the Agents list to duplicate an agent with all configuration -- system prompt, persona, skills, memory settings, and channel bindings.
@@ -909,7 +915,7 @@ The **Browser Automation** step opens a guided wizard instead of the old flat pa
 
 The wizard starts with a **trail picker**:
 
-1. **🎬 Record a flow (recommended)** — type a starting URL, the recorder modal opens with the URL already filled in, and Chromium streams into the Flows page. Every click, fill, and navigation is captured into a step ledger and compiled into the same `selectors[]` rows you'd otherwise type by hand.
+1. **🎬 Record a flow (recommended)** — type a starting URL and open the recorder. Because the wizard already has the URL, Chromium starts automatically while the modal shows its live startup timer; no second Start click is required. Every click, fill, and navigation is captured into a step ledger and compiled into the same `selectors[]` rows you'd otherwise type by hand.
 2. **⚙️ Configure manually** — pick a friendly action (Open a page, Click something, Fill a form, Extract text, Wait for element, Run JS, or "More actions…"), type the URL, and the wizard shows ONLY the selector fields that action needs. No more rummaging through 6 unrelated columns to fill in one form field.
 
 Editing an existing step opens the wizard directly on the **Review** stage with everything pre-loaded and **Advanced** collapsed, so simple tweaks stay fast. Click "← Start over" to drop selectors and pick a new trail; click "Change action" inside the Manual trail to swap actions without losing the URL.
@@ -924,8 +930,8 @@ Whichever trail you pick, the output writes into the same `FlowStepConfig` shape
 
 - **▣ Mark captcha** drags a box over a captcha image and emits a `solve_captcha` row pointing at the next captured fill — exactly the shape the official Correios postal-tracking flow needs.
 - **👁 Capture output** drags over a text region and emits an `extract` row with a named output variable for downstream steps.
-- **📋 Capture timeline** drags over a tracking/event timeline (e.g. the Correios SEDEX history) and compiles a structured `execute_script` parser instead of a plain text extract. It returns an `events[]` list plus `latest_status`/`latest_at`/`latest_location`, an `event_count`, and a deterministic dedupe key (`latest_event_key`). The recorder auto-appends a `normalize_tracking` Data Transform that **exposes the parsed object as the reusable flow variable `{{normalize_tracking.data_preview.*}}`** (`latest_status`, `latest_at`, `latest_location`, `event_count`, `latest_event_key`, `tracking_code`). The recorder does **not** send anything — to deliver the update, add a **Notification** step after the recording (next section, step 10) and reference those fields. (Decoupling rationale: sending is the first-class Notification step's job; the recorder just produces the data, so the same variable can feed any channel.)
-- **🔑 Vault?** chip appears on any captured fill whose field name or `type=password` suggests a credential. Click it to open the existing Password Vault picker; the plaintext value gets swapped for the picker's `op://` reference and a row is added to `browser_secret_references`. The Save button refuses to compile if any plaintext password remains.
+- **📋 Capture area** drags over any card, list, panel, or results region and compiles a structured `execute_script` parser instead of a plain text extract. Every region returns `text`, `title`, `items`, `item_count`, `captured_at`, and a deterministic `dedupe_key`; if the selected area contains dated rows, it also returns `events[]`, `latest_status`, `latest_at`, `latest_location`, `event_count`, and `latest_event_key`. On the flow-level **🎬 Record session instead** path, the recorder appends a `capture` Data Transform that exposes the object as `{{capture.data_preview.*}}`. Parsing remains inside the marked region (or its nearest explicit semantic card/panel), never the whole page or a sibling card. The recorder does **not** send anything — add a first-class **Notification** step and reference the fields you need.
+- **🔑 Vault?** chip appears on any captured fill whose field name or `type=password` suggests a credential. Click it to open the existing Password Vault picker; the plaintext value gets swapped for the picker's `op://` reference and a row is added to `browser_secret_references`. Save fails with a safe validation message if any plaintext password remains; the captured password is never echoed in the error.
 - **▾ Agentic mode** (opt-in; requires `browser-use` from `requirements-optional.txt`) lets a Browser-Use agent drive the same recording session from a free-form prompt. Pause/resume hands control back to you mid-run. The compiled output is bit-for-bit shaped like a human recording. Requires an Anthropic Provider Instance configured under Hub > Providers for the tenant; the recorder surfaces a 503 with a setup hint when missing.
 
 ##### Worked example — replicate "Postal Track | Correios | AD468811215BR" via UI in ~2 minutes
@@ -934,7 +940,7 @@ This is the canonical browser-automation flow shipped with Tsushin. It pulls pac
 
 1. **Flows → "+ New flow"** → name it `Postal Track | Correios | AD468811215BR` → add a **Browser Automation** step.
 2. In the step's "Selectors and actions" header, click **🎬 Record**.
-3. URL: `https://rastreamento.correios.com.br/app/index.php`. Click **Start recording**. Wait ~1s for the canvas to show the live page.
+3. URL: `https://rastreamento.correios.com.br/app/index.php`. Click **🎬 Open recorder →**. The recording starts automatically; wait for the canvas to show the live page.
 4. **Click the tracking input** (`Informe o código de rastreamento`) on the canvas, then type `AD468811215BR`. A `Fill` row appears in the right panel.
 5. Click the **▣ Mark captcha** tile. Drag a box over the Securimage CAPTCHA image. A `Captcha` row appears with the image's selector. The recorder will automatically wire its `value_target` to the next field you fill.
 6. **Click the CAPTCHA text input** (right of the image) → type any placeholder (e.g. `XXXXXX`). This becomes the `value_target` for the `solve_captcha` row. At flow execution time the `solve_captcha` skill OCRs the live image and overwrites this placeholder.
@@ -946,28 +952,29 @@ This is the canonical browser-automation flow shipped with Tsushin. It pulls pac
    - `fill input[name="captcha"]` value=`XXXXXX` (runtime overwrites with OCR result)
    - `click button[name="b-pesquisar"]`
    - `extract <result panel selector>` as=`delivery_status`
-10. **Add a Notification step at the bottom** so you actually find out the flow ran. Click *+ Add step* → choose **Notification** → set channel `whatsapp`, recipient `@Vini` (or whichever contact handle). For a **📋 Capture timeline** recording, reference the `normalize_tracking` variable the recorder exposed — the canonical message (no footer):
+10. **Add a Notification step at the bottom** so you actually find out the flow ran. Click *+ Add step* → choose **Notification** → set channel `whatsapp`, recipient `@Vini` (or whichever contact handle). If you used the flow-level **🎬 Record session instead** path with **📋 Capture area**, reference the generated `capture` variable — for a dated tracking panel, for example:
 
     ```
-    Correios {{normalize_tracking.data_preview.tracking_code}} update
-    Status: {{normalize_tracking.data_preview.latest_status}}
-    When: {{normalize_tracking.data_preview.latest_at}}
-    Location: {{normalize_tracking.data_preview.latest_location}}
-    Events: {{normalize_tracking.data_preview.event_count}}
-    Dedupe: {{normalize_tracking.data_preview.latest_event_key}}
+    Correios update
+    Status: {{capture.data_preview.latest_status}}
+    When: {{capture.data_preview.latest_at}}
+    Location: {{capture.data_preview.latest_location}}
+    Events: {{capture.data_preview.event_count}}
+    Dedupe: {{capture.data_preview.latest_event_key}}
     ```
 
-    (For a plain **👁 Capture output** extract, reference its named variable instead, e.g. `{{step_1.delivery_status}}`.) The Notification step's **Variable Reference {x}** panel lists the available previous-step fields. This is a project-wide convention: every browser-automation flow should end with a notification so the success/failure is observable. A silent flow is indistinguishable from a flow that didn't run.
+    For an undated card or list, use `{{capture.data_preview.text}}` or `{{capture.data_preview.items}}`. For the guided wizard's plain **👁 Capture output** extract, reference its named variable instead, e.g. `{{step_1.delivery_status}}`. The Notification step's **Variable Reference {x}** panel lists the available previous-step fields. This is a project-wide convention: every browser-automation flow should end with a notification so the success/failure is observable. A silent flow is indistinguishable from a flow that didn't run.
 11. Click **Update Flow** at the top of the editor. Done — when this flow executes, the recorder replays the recorded actions, the runtime solves the live captcha, and the notification step pings you with the extracted `delivery_status`.
 
 Alternative: under **▾ Agentic mode**, paste the prompt *"Track Brazilian postal package AD468811215BR. Fill the tracking code in the search field, mark the CAPTCHA image, and click Consultar."* and click Start. The agent drives steps 4–8 for you while you watch. Take over at any point with the Pause button. Don't forget to still append the Notification step manually before saving — the recorder doesn't add it for you.
 
 ##### Multi-FlowNode compile output (the production-ready shape, 2026-05-23)
 
-The recorder backend's `/compile` endpoint emits *two* shapes for every recording:
+The recorder backend's `/compile` endpoint emits *three* shapes for every recording:
 
 - **`config_json`** — legacy single-FlowNode shape that drops into the existing `BrowserAutomationConfigPanel` editor when you click *Save as flow step*. Good for adding a single browser action to an existing flow you're editing manually.
 - **`flow_nodes[]`** — production-ready multi-FlowNode shape, one FlowNode per browser action. This is what programmatic consumers (smoke-test script, future "Save as new flow" button) should use. Captcha chains automatically collapse into one canonical `solve_captcha` step with `solver_provider: "gemini"` and `solver_timeout_seconds: 120` for fast vision OCR.
+- **`flow_group`** — the production-ready `browser_group` parent, annotated browser children, and `trailing_nodes`. The flow-level **🎬 Record session instead** UI consumes this shape; a Capture area adds its `capture` data transform to `trailing_nodes`.
 
 Today the manual *Save as flow step* button in the recorder dialog uses the legacy shape (one step at a time). Use the smoke-test script (below) or the API directly to insert multi-FlowNode recordings into a new flow.
 
@@ -981,7 +988,7 @@ A recording-as-a-multi-FlowNode flow used to render as N flat steps interleaved 
 
 The same renderer powers the **Watcher → Flows → View Details** modal in **run mode**: the expanded body adds a runtime thumbnail next to each recorded one (sourced from `FlowNodeRun.output_json.screenshot_paths`) plus a status chip (completed / failed / running) so auditors can compare *what was recorded* against *what actually happened* without opening multiple tabs.
 
-The recorder /compile endpoint now emits a *third* shape — `flow_group = { group_node, child_nodes }` — alongside `config_json` and `flow_nodes[]`. The `group_node` is a new `browser_group` step type whose runtime handler is a pure no-op (returns `completed` in 0 ms); the children execute exactly as ordinary `browser_automation` steps. All grouping data (`group_recording_id`, `group_index`, `recorded_driver`, `recorded_at`, `screenshot_b64`) lives in each child's `config_json` so the card needs no extra fetch.
+The `flow_group = { group_node, child_nodes, trailing_nodes }` compile shape sits alongside `config_json` and `flow_nodes[]`. The `group_node` is a `browser_group` step type whose runtime handler is a pure no-op (returns `completed` in 0 ms); the children execute exactly as ordinary `browser_automation` steps. All grouping data (`group_recording_id`, `group_index`, `recorded_driver`, `recorded_at`, `screenshot_b64`) lives in each child's `config_json` so the card needs no extra fetch. Non-browser outputs such as the Capture area's `capture` data transform are placed in `trailing_nodes` after the children.
 
 **Backwards compat**: any existing flow with ≥2 consecutive `browser_automation` steps auto-renders as a *synthetic* group, marked with an amber **Auto-grouped — save to persist** badge. No migration is needed — the original flat steps are untouched in storage; only the rendering changed.
 
@@ -999,14 +1006,15 @@ A healthy run ends with `OVERALL: PASS` and a WhatsApp ping to Vini. If the What
 
 - The recorder uses **stock Playwright** — sites that ban automated browsers may reject the inner session. For those targets, the existing manual editor still works.
 - Each tenant can have **2 concurrent recordings** open at once; trying to start a third returns HTTP 409 with a "discard an existing recording first" hint.
-- Recordings auto-tear down **30 minutes** after the last interaction, hard cap **2 hours**. A forgotten dialog won't leak a Chromium instance.
+- Closing or unmounting the recorder tears down its active session. If Chromium finishes starting after the modal was closed, that late-created session is deleted immediately. The janitor remains the fallback: **30 minutes** after the last interaction, hard cap **2 hours**.
+- **Capture area is deliberately bounded:** choose a specific card, list, panel, or result region. A document-wide/root selection is rejected, and the parser never searches a sibling card or the whole page for substitute data.
 - **Recorder behaviour after the 2026-05-27 bug-fix wave** (PRs #214/#216/#218/#220):
   - The streamed canvas auto-focuses on first click — typing the very next character reaches the inner page (no devtools focus trick needed).
   - FILL events in the step ledger collapse one row per typed string (was one row per keystroke).
   - The captcha "Mark captcha" toolbar resolves the image selector correctly; the compiler scrubs document-root selectors (`body`/`html`/`*`) and refuses to ship them.
   - The captcha submit button is chosen from the recorded sequence by name — `button[name="b-pesquisar"]` / submit-button-like CSS — instead of the focus-click into the captcha input.
-  - When the recorder didn't capture an explicit wait between submit and extract, the compiler auto-inserts `wait_tracking_result` targeting the extract's selector (only when the selector matches a content-region pattern like `.ship-steps` / `.result` / `.tracking`).
-  - The captcha skill's `success_selector` is only populated when the recorded extract matches a content-region pattern — noise selectors (carousel, ads) are scrubbed so the skill doesn't exit before the page settles.
+  - When the recorder didn't capture an explicit wait between submit and a structured region capture, the compiler auto-inserts `wait_capture_region` targeting that exact marked selector.
+  - On captcha-gated recordings, the captcha skill's `success_selector` is the same exact region used by `wait_capture_region`; broad document roots are rejected instead of substituted.
   - Newly recorded browser_automation children + new Notification steps default `on_failure='continue'` — so a single bad step never silently swallows the trailing alert.
   - The "Capture as output" naming dialog is now an in-modal form (was `window.prompt`); Cancel really cancels.
   - The notification step's MCP resolver falls back to a `tester` instance for the same tenant when no `agent` instance is registered — the default local-dev shape (e.g. a tenant whose only WhatsApp MCP is the Vini local tester on port 8082) now delivers correctly instead of silently routing to the hardcoded `127.0.0.1:8080` default.

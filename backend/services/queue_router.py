@@ -14,6 +14,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from constants.agent_config import DEFAULT_AGENT_TIMEZONE
+
 logger = logging.getLogger(__name__)
 
 
@@ -877,6 +879,7 @@ async def _invoke_agent_for_continuous_run(
         "enable_semantic_search": getattr(agent, "enable_semantic_search", False),
         "semantic_search_results": getattr(agent, "semantic_search_results", 5),
         "semantic_similarity_threshold": getattr(agent, "semantic_similarity_threshold", 0.3),
+        "timezone": getattr(agent, "timezone", None) or DEFAULT_AGENT_TIMEZONE,
         "run_type": "continuous",
         "continuous_agent_context": {
             "tenant_id": run.tenant_id,

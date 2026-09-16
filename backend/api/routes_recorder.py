@@ -114,11 +114,11 @@ class CompileResponse(BaseModel):
 
 class CompileRequest(BaseModel):
     # Reserved for future compile options. The recorder no longer wires a
-    # notification: a structured "event timeline" capture is exposed as the
-    # reusable `normalize_tracking.data_preview.*` flow variable, and the user
-    # adds a first-class Notification flow step that references it. This keeps
-    # the recorder to "produce the data" and avoids duplicating the
-    # notification surface inside the browser-recording dialog.
+    # notification: a "Capture area" region is exposed as the reusable
+    # `capture.data_preview.*` flow variable, and the user adds a first-class
+    # Notification flow step that references it. This keeps the recorder to
+    # "produce the data" and avoids duplicating the notification surface
+    # inside the browser-recording dialog.
     pass
 
 
@@ -195,17 +195,23 @@ async def compile_session(
         raise HTTPException(status_code=404, detail="Recording session not found")
 
     from browser_recorder.event_compiler import (
+        RecorderCompileError,
         compile_events,
         compile_events_into_group,
         compile_events_into_nodes,
     )
 
-    config_json = compile_events(session.events)
-    flow_nodes = compile_events_into_nodes(session.events)
-    flow_group = compile_events_into_group(
-        session.events,
-        recording_id=session.recording_id,
-    )
+    try:
+        config_json = compile_events(session.events)
+        flow_nodes = compile_events_into_nodes(session.events)
+        flow_group = compile_events_into_group(
+            session.events,
+            recording_id=session.recording_id,
+        )
+    except RecorderCompileError as exc:
+        # A recorder validation failure is actionable user input, not a server
+        # error. Never include captured field values in the detail string.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return CompileResponse(
         config_json=config_json,

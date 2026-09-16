@@ -15,6 +15,7 @@ from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
 
 from services.watcher_activity_service import emit_agent_communication_async
+from constants.agent_config import DEFAULT_AGENT_TIMEZONE
 from models import (
     Agent,
     AgentSkill,
@@ -921,6 +922,7 @@ class AgentCommunicationService:
             "memory_isolation_mode": target_agent.memory_isolation_mode or "isolated",
             "max_agentic_rounds": getattr(target_agent, "max_agentic_rounds", None),
             "max_agentic_loop_bytes": getattr(target_agent, "max_agentic_loop_bytes", None),
+            "timezone": getattr(target_agent, "timezone", None) or DEFAULT_AGENT_TIMEZONE,
         }
         try:
             from models import Config

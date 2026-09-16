@@ -318,6 +318,37 @@ class SkillManager:
             logger.error(f"Error fetching skill config: {e}", exc_info=True)
             return None
 
+    def build_runtime_config(
+        self,
+        db: Session,
+        agent_id: int,
+        skill_config: Optional[Dict[str, Any]] = None,
+        *,
+        agent_obj=None,
+    ) -> Dict[str, Any]:
+        """Merge saved skill settings with authoritative agent runtime context.
+
+        Shared context keys must come from the Agent row, not the mutable
+        ``AgentSkill.config`` JSON.  In particular, allowing a stale skill-level
+        ``timezone`` to win would make reminders behave differently depending on
+        whether they were invoked through chat, slash commands, or tool mode.
+        """
+        from constants.agent_config import DEFAULT_AGENT_TIMEZONE
+        from models import Agent as AgentModel
+
+        config = dict(skill_config or {})
+        if agent_obj is None:
+            agent_obj = db.query(AgentModel).filter(AgentModel.id == agent_id).first()
+
+        config["agent_id"] = agent_id
+        config["db"] = db
+        config["timezone"] = (
+            getattr(agent_obj, "timezone", None) or DEFAULT_AGENT_TIMEZONE
+        )
+        if agent_obj is not None:
+            config["tenant_id"] = agent_obj.tenant_id
+        return config
+
     @classmethod
     def audit_agent_skill_config_key_collisions(
         cls,
@@ -714,16 +745,13 @@ class SkillManager:
                 else:
                     return f"Error: Tool '{tool_name}' is not enabled for this agent"
 
-            config = (skill_record.config if skill_record else None) or {}
-
-            # BUG-384: Inject tenant_id and agent_id — handle None values too
-            if not config.get('tenant_id') or 'agent_id' not in config:
-                from models import Agent as AgentModel
-                agent_obj = db.query(AgentModel).filter(AgentModel.id == agent_id).first()
-                if agent_obj:
-                    config['tenant_id'] = agent_obj.tenant_id
-            config['agent_id'] = agent_id
-            config['db'] = db
+            # Copy the persisted JSON and then inject authoritative Agent fields.
+            # This also avoids mutating SQLAlchemy's tracked config object in-place.
+            config = self.build_runtime_config(
+                db,
+                agent_id,
+                skill_record.config if skill_record else None,
+            )
 
             # BUG-LOG-006 FIX: Propagate A2A comm_depth and parent_session_id from message
             # so agent_communication_skill can enforce depth limits on chained delegations
@@ -1082,11 +1110,13 @@ class SkillManager:
                     skill_instance.set_token_tracker(self.token_tracker)
                 skill_instance._agent_id = agent_id
 
-                config = dict(skill_record.config or {})
-                config['agent_id'] = agent_id
                 agent = _get_agent()
-                if agent and agent.tenant_id and not config.get('tenant_id'):
-                    config['tenant_id'] = agent.tenant_id
+                config = self.build_runtime_config(
+                    db,
+                    agent_id,
+                    skill_record.config,
+                    agent_obj=agent,
+                )
                 skill_instance._config = config
 
                 try:
@@ -1139,13 +1169,14 @@ class SkillManager:
                             skill_instance.set_token_tracker(self.token_tracker)
                         skill_instance._agent_id = agent_id
 
-                        config = dict(audio_skill.config or {})
-                        config['agent_id'] = agent_id
-
                         agent = _get_agent()
+                        config = self.build_runtime_config(
+                            db,
+                            agent_id,
+                            audio_skill.config,
+                            agent_obj=agent,
+                        )
                         if agent:
-                            if agent.tenant_id and not config.get('tenant_id'):
-                                config['tenant_id'] = agent.tenant_id
                             if agent.provider_instance_id and not config.get('provider_instance_id'):
                                 config['provider_instance_id'] = agent.provider_instance_id
 

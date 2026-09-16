@@ -288,6 +288,7 @@ export default function BrowserStepWizard({ config, onChange, allSteps, currentS
           url={cfg.url || ''}
           onUrlChange={(u) => onChange({ url: u })}
           hideUrlBar
+          autoStart
           onApply={handleRecorderApply}
         />
       </div>

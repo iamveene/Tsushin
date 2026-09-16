@@ -2,15 +2,15 @@
 
 /**
  * Tool palette overlay for the recorder. Three modes — capture captcha,
- * capture output text, and (Phase 4) wire a vault entry — translate
- * directly into FlowNode `selectors[]` row shapes when the recorder
- * compiles the session.
+ * capture a single output value, and capture a whole region/area —
+ * translate directly into FlowNode `selectors[]` row shapes when the
+ * recorder compiles the session.
  *
  * The palette itself is stateless; the parent (RecorderDialog) owns the
  * current marker mode and forwards user gestures to the StreamCanvas.
  */
 
-export type MarkerMode = 'captcha' | 'extract' | 'timeline' | null
+export type MarkerMode = 'captcha' | 'extract' | 'area' | null
 
 interface ToolPaletteProps {
   markerMode: MarkerMode
@@ -30,7 +30,7 @@ export default function ToolPalette({
 }: ToolPaletteProps) {
   const captchaActive = markerMode === 'captcha'
   const extractActive = markerMode === 'extract'
-  const timelineActive = markerMode === 'timeline'
+  const areaActive = markerMode === 'area'
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
@@ -64,16 +64,16 @@ export default function ToolPalette({
 
       <button
         type="button"
-        onClick={() => onModeChange(timelineActive ? null : 'timeline')}
+        onClick={() => onModeChange(areaActive ? null : 'area')}
         className={
           `${baseBtn} ` +
-          (timelineActive
+          (areaActive
             ? 'border-cyan-400 bg-cyan-500/20 text-cyan-200'
             : 'border-slate-600 bg-slate-800/50 text-slate-300 hover:border-cyan-500/50 hover:text-cyan-200')
         }
-        title="Drag a box over a tracking/event timeline (e.g. the Correios SEDEX history). The runtime parses it into structured events + a dedupe key for the notification."
+        title="Drag a box over any region — a card, list, or panel. Its content (and any dated rows it contains) is captured for a downstream notification."
       >
-        📋 Capture timeline
+        📋 Capture area
       </button>
 
       {onOpenVaultPicker && (
@@ -91,8 +91,8 @@ export default function ToolPalette({
         <span className="text-xs text-slate-400 italic">
           Drag a box over the {markerMode === 'captcha'
             ? 'captcha image'
-            : markerMode === 'timeline'
-              ? 'tracking/event timeline'
+            : markerMode === 'area'
+              ? 'region to capture (card, list, or panel)'
               : 'text to capture'}…
         </span>
       )}

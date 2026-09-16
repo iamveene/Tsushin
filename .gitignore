@@ -297,6 +297,7 @@ backend/tests/*
 !backend/tests/test_v070_backend_completion.py
 !backend/tests/test_provider_instance_catalog.py
 !backend/tests/test_playground_memory_regressions.py
+!backend/tests/test_agent_timezone_regressions.py
 !backend/tests/test_mcp_container_manager.py
 !backend/tests/test_kb_custom_embeddings.py
 !backend/tests/test_routes_mcp_instances_tester.py

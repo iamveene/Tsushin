@@ -22,6 +22,7 @@ import os
 import json
 
 from sqlalchemy.orm import Session
+from utils.agent_timezone import resolve_timezone_name, to_utc_naive
 
 from .base import (
     SchedulerProviderBase,
@@ -153,10 +154,8 @@ class AsanaProvider(SchedulerProviderBase):
         due_at = task.get("due_at")  # DateTime: "2025-01-15T17:00:00.000Z"
 
         if due_at:
-            # Parse datetime
-            if due_at.endswith("Z"):
-                due_at = due_at[:-1]
-            start = datetime.fromisoformat(due_at.replace(".000", ""))
+            # Preserve the instant so callers can render it in the agent's zone.
+            start = datetime.fromisoformat(due_at.replace("Z", "+00:00"))
         elif due_on:
             # Parse date only (midnight)
             start = datetime.strptime(due_on, "%Y-%m-%d")
@@ -241,8 +240,12 @@ class AsanaProvider(SchedulerProviderBase):
 
             # Format due date
             if start:
-                # Asana accepts ISO format with timezone
-                tool_args["due_at"] = start.isoformat() + "Z"
+                timezone_name = resolve_timezone_name(kwargs.get("timezone"))
+                if start.tzinfo is None and kwargs.get("start_is_utc"):
+                    utc_start = start
+                else:
+                    utc_start = to_utc_naive(start, timezone_name)
+                tool_args["due_at"] = utc_start.isoformat() + "Z"
 
             if description:
                 tool_args["notes"] = description
@@ -441,7 +444,12 @@ class AsanaProvider(SchedulerProviderBase):
                 tool_args["name"] = title
 
             if start is not None:
-                tool_args["due_at"] = start.isoformat() + "Z"
+                timezone_name = resolve_timezone_name(kwargs.get("timezone"))
+                if start.tzinfo is None and kwargs.get("start_is_utc"):
+                    utc_start = start
+                else:
+                    utc_start = to_utc_naive(start, timezone_name)
+                tool_args["due_at"] = utc_start.isoformat() + "Z"
 
             if description is not None:
                 tool_args["notes"] = description

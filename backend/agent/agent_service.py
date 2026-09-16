@@ -1187,11 +1187,18 @@ CRITICAL - Language Matching (HIGHEST PRIORITY):
 - Do NOT greet in a different language than the user's message
 """
 
-        # Add current date/time context
+        # Add current date/time context in the AGENT'S timezone (not the container's UTC).
+        # Root-cause fix for the reminder-offset bug: datetime.now() was naive and the
+        # container runs in UTC, so relative reminders ("in 15 minutes") were computed
+        # ~3h off. Resolve the agent's configured timezone, defaulting to America/Sao_Paulo.
         from datetime import datetime
-        current_date = datetime.now().strftime("%B %d, %Y")  # e.g., "October 01, 2025"
-        current_time = datetime.now().strftime("%H:%M")
-        system_prompt_with_date = f"{model_identity_guard}\n\n{system_prompt}\n\nIMPORTANT: Today's date is {current_date} and current time is {current_time}. When users ask for 'today' or 'now', they are referring to this date."
+        from utils.agent_timezone import resolve_timezone, resolve_timezone_name
+        tz_name = resolve_timezone_name(self.config.get("timezone") if self.config else None)
+        _agent_tz = resolve_timezone(tz_name)
+        _now_local = datetime.now(_agent_tz)
+        current_date = _now_local.strftime("%B %d, %Y")  # e.g., "October 01, 2025"
+        current_time = _now_local.strftime("%H:%M")
+        system_prompt_with_date = f"{model_identity_guard}\n\n{system_prompt}\n\nIMPORTANT: Today's date is {current_date} and the current time is {current_time} ({tz_name}). When users say 'today', 'now', or a relative time like 'in 15 minutes', they mean this date/time in {tz_name}; interpret and emit all datetimes in {tz_name} unless the user explicitly names another timezone."
 
         # Phase 4.2: Add contact information to system prompt
         # IMPORTANT: Pass agent_id to prevent personality contamination between agents
