@@ -26,27 +26,33 @@ _DEFAULT_TIMEOUT_PER_STEP = 15
 _BASE_TIMEOUT = 30
 
 
+class RecorderCompileError(ValueError):
+    """A recording cannot be persisted safely or replayed deterministically."""
+
+
 # ---------------------------------------------------------------------------
-# Structured "event timeline" capture
+# Generic region / "Capture area" capture
 # ---------------------------------------------------------------------------
 #
 # A plain `marker.extract` compiles to `tool_action: extract` = innerText of
-# the marked region. That's fine for a single value, but postal-tracking
-# pages render a *timeline* of events, and the canonical notification needs
-# structured fields (latest status/when/location, an event count, and a
-# stable dedupe key). When the user marks the timeline region with the
-# "timeline" capture kind, the recorder compiles an `execute_script` node
-# whose JS parses the timeline into that structured shape — so a recording
-# made entirely through the UI yields the same structured message a
-# hand-authored flow would, with no manual config.
+# the marked region. That's fine for a single value, but most pages worth
+# monitoring render a *region* — a card, a panel, an event list — and a
+# notification wants its content (and, when present, the structured rows
+# inside it). When the user marks a region with the "area" capture kind, the
+# recorder compiles an `execute_script` node whose JS reads the region into a
+# generic shape: `text`/`title`/`items` for any region, plus a `latest_*` +
+# `events` block when the region looks like a dated timeline. So a recording
+# made entirely through the UI yields a ready-to-send message with no manual
+# config, on any site — not just postal tracking.
 #
-# The parser is resilient: it resolves a root from the marked selector and
-# falls back to the Correios container / document, then reads the common
-# ".ship-steps li.step" timeline shape. `latest_event_key` is a deterministic
-# FNV-1a hash so re-runs on the same delivered event produce the same dedupe
-# slug (e.g. "22-05-2026-15-46:objeto-entregue-ao-destinata:yl79uz").
-_TIMELINE_PARSER_JS = r"""() => {
-  const tracking_code = __TRACKING_CODE_JSON__;
+# The parser stays inside the marked region, promoting a marked leaf only to a
+# nearest explicitly-semantic card/panel/result container. Dated-row detection
+# (BUG-786) stays generic within that boundary: a real timeline row carries a
+# date, which rejects nav/menu/carousel rows. `latest_event_key` is a
+# deterministic FNV-1a hash so re-runs on the same delivered event produce the
+# same dedupe slug, and `dedupe_key` hashes the captured text so unchanged
+# content de-dupes regardless of provider.
+_CONTENT_PARSER_JS = r"""() => {
   const markedRoot = __ROOT_SELECTOR_JSON__;
   const clean = (value) => String(value || '').replace(/\s+/g, ' ').trim();
   const slug = (value) => clean(value)
@@ -66,21 +72,19 @@ _TIMELINE_PARSER_JS = r"""() => {
   };
   const parseEvent = (node, index) => {
     const status = clean(node.querySelector('.text-head')?.textContent || node.querySelector('strong')?.textContent || node.querySelector('h3, h4, h5')?.textContent || '');
-    const text = clean(node.textContent || '');
-    const dateMatch = text.match(/(\d{2}\/\d{2}\/\d{4})\s*(?:às|as)?\s*(\d{2}:\d{2})?/i);
+    const text = clean(node.textContent || '').slice(0, 1000);
+    const dateMatch = text.match(/(\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4})\s*(?:às|as)?\s*(\d{1,2}:\d{2})?/i);
     const at = dateMatch ? [dateMatch[1], dateMatch[2]].filter(Boolean).join(' ') : '';
     const fragments = Array.from(node.querySelectorAll('p, span, div')).map((el) => clean(el.textContent)).filter(Boolean).filter((value, idx, all) => all.indexOf(value) === idx);
     const location = fragments.find((value) => value !== status && value !== at && /(Unidade|Agência|Agencia|Centro|CTE|CDD|CEE|Objeto|BRASIL|[A-Z]{2}$)/.test(value)) || '';
     return { index, status, at, location, text };
   };
-  // BUG-786: generic results-root. A real timeline row carries a date, which
-  // rejects nav/menu/carousel rows. We try selectors MOST-SPECIFIC FIRST and
-  // use the first that yields rows (so the precise Correios ".ship-steps
-  // li.step" wins its real count and broad selectors don't over-count nested
-  // wrappers), and we drop ancestor rows that merely contain other rows.
-  // Across containers we likewise take the first that yields a timeline:
-  // marked region → Correios container → common result/timeline containers →
-  // document. Not tied to Correios.
+  // BUG-786: generic dated-row detection. A real timeline row carries a date,
+  // which rejects nav/menu/carousel rows. We try selectors MOST-SPECIFIC
+  // FIRST and use the first that yields rows (so the precise Correios
+  // ".ship-steps li.step" wins its real count and broad selectors don't
+  // over-count nested wrappers), and we drop ancestor rows that merely
+  // contain other rows. Not tied to Correios.
   const DATE_RE = /\d{1,2}[\/.\-]\d{1,2}[\/.\-]\d{2,4}/;
   const STEP_SELECTORS = ['.ship-steps li.step', '.ship-steps li', 'li.step',
     '[class*="step" i]', '[class*="evento" i]', '[class*="event" i]',
@@ -94,77 +98,77 @@ _TIMELINE_PARSER_JS = r"""() => {
       let found;
       try { found = Array.from(el.querySelectorAll(sel)); } catch (e) { continue; }
       const rows = leavesOnly(found.filter((n) => DATE_RE.test(n.textContent || '')));
-      if (rows.length) return rows;
+      if (rows.length) return rows.slice(0, 100);
     }
     return [];
   };
-  const ROOT_HINTS = [markedRoot, '#tabs-rastreamento', '[class*="result" i]',
-    '[class*="rastreamento" i]', '[class*="track" i]', '[class*="timeline" i]', 'main'];
-  let nodes = [];
-  for (const sel of ROOT_HINTS) {
-    if (!sel) continue;
-    let el;
-    try { el = document.querySelector(sel); } catch (e) { continue; }
-    const rows = rowsIn(el);
-    if (rows.length) { nodes = rows; break; }
+  const pick = (sel) => { try { return sel ? document.querySelector(sel) : null; } catch (e) { return null; } };
+  // The capture must stay within the region the user selected. We may promote
+  // a marked leaf to its nearest explicitly-semantic card/panel/result
+  // container, but never walk arbitrary parents: doing that can pull sibling
+  // cards (and their private content) into the capture.
+  let rootEl = pick(markedRoot);
+  if (!rootEl) throw new Error('Capture region not found: ' + markedRoot);
+  const CONTAINER_SELECTOR = [
+    'article', '[role="region"]',
+    '[class~="card" i]', '[class$="-card" i]', '[class*="-card " i]',
+    '[class~="panel" i]', '[class$="-panel" i]', '[class*="-panel " i]',
+    '[class~="result" i]', '[class$="-result" i]', '[class*="-result " i]',
+    '[class~="timeline" i]', '[class$="-timeline" i]', '[class*="-timeline " i]'
+  ].join(', ');
+  let semanticRoot = null;
+  try { semanticRoot = rootEl.closest(CONTAINER_SELECTOR); } catch (e) { semanticRoot = null; }
+  if (semanticRoot && !['BODY', 'HTML', 'MAIN', 'HEADER', 'NAV', 'FOOTER', 'ASIDE'].includes(semanticRoot.tagName)) {
+    rootEl = semanticRoot;
   }
-  if (!nodes.length) nodes = rowsIn(document.body);
+  // Timeline detection is deliberately scoped to rootEl. A selected card with
+  // no dated rows must never borrow events from another timeline on the page.
+  const nodes = rowsIn(rootEl);
+  // Generic region content — works for any card/panel/region.
+  const text = clean(rootEl.innerText || rootEl.textContent || '').slice(0, 5000);
+  const heading = rootEl.querySelector('h1, h2, h3, h4, [role="heading"]');
+  const title = clean(heading?.textContent || document.title || '');
   const events = nodes.map(parseEvent).filter((event) => event.status || event.text);
+  // A generic list still exposes meaningful items even when its rows have no
+  // dates. Prefer the timeline rows when present; otherwise use leaf list/table
+  // rows inside the selected region only.
+  let items = events.map((e) => e.text).filter(Boolean);
+  if (!items.length) {
+    const ITEM_SELECTORS = ['li', '[role="listitem"]', 'tbody > tr'];
+    for (const sel of ITEM_SELECTORS) {
+      let found = [];
+      try { found = Array.from(rootEl.querySelectorAll(sel)); } catch (e) { found = []; }
+      const leaves = leavesOnly(found);
+      const values = leaves.map((node) => clean(node.textContent || '').slice(0, 1000)).filter(Boolean);
+      if (values.length) { items = values.slice(0, 100); break; }
+    }
+  }
+  const captured_at = new Date().toISOString();
+  const dedupe_key = 'capture:' + hash(text);
+  const base = { text, title, items, item_count: items.length, captured_at, dedupe_key };
+  if (!events.length) return base;
+  // Timeline-compat block — only when the region held dated rows.
   const latest = events[0] || {};
   const latest_status = latest.status || latest.text || '';
   const latest_at = latest.at || '';
   const latest_location = latest.location || '';
-  const full_event_key = [latest_status, latest_at, latest_location].map(slug).filter(Boolean).join(':') || 'no-event';
   const latest_event_key = [slug(latest_at).slice(0, 16) || 'no-date', slug(latest_status).slice(0, 28) || 'status', hash([latest_status, latest_at, latest_location, latest.text].join('|'))].join(':').slice(0, 64);
-  return {
-    tracking_code,
+  return Object.assign(base, {
     latest_status,
     latest_at,
     latest_location,
-    event_count: events.length,
     events,
+    event_count: events.length,
     latest_event_key,
-    full_event_key,
-    record_kind: 'postal_tracking_status',
-    provider: 'correios',
-    subject_key: tracking_code,
-    period_key: latest_event_key,
-    status: latest_status || 'unknown',
-    title: `Correios ${tracking_code} - ${latest_status || 'unknown'}`,
-    dedupe_key: `postal_tracking_status:correios:${tracking_code}:${latest_event_key}`
-  };
+  });
 }"""
 
 
-def _timeline_parser_script(tracking_code: str, root_selector: str) -> str:
-    """Render the timeline parser JS with the recorded code + marked root."""
-    return (
-        _TIMELINE_PARSER_JS
-        .replace("__TRACKING_CODE_JSON__", json.dumps(tracking_code or ""))
-        .replace("__ROOT_SELECTOR_JSON__", json.dumps(root_selector or "#tabs-rastreamento"))
+def _content_parser_script(root_selector: str) -> str:
+    """Render the region/content parser JS bound to the marked root."""
+    return _CONTENT_PARSER_JS.replace(
+        "__ROOT_SELECTOR_JSON__", json.dumps(root_selector or "")
     )
-
-
-def _tracking_code_from_rows(selectors: list[dict[str, Any]]) -> str:
-    """Pull the recorded tracking code from the fill rows.
-
-    Prefers a fill whose selector names the tracking input (`objeto`), else
-    the first non-vault fill value. This is the value the user actually
-    typed during recording — never hardcoded.
-    """
-    fallback = ""
-    for row in selectors:
-        if row.get("action") != "fill":
-            continue
-        value = str(row.get("value") or "")
-        if not value or value.startswith(("pvh_", "op://")):
-            continue
-        sel = (row.get("selector") or "").lower()
-        if "objeto" in sel:
-            return value
-        if not fallback:
-            fallback = value
-    return fallback
 
 
 def _slugify(text: str, default: str = "captured") -> str:
@@ -370,15 +374,31 @@ def _row_extract(payload: dict[str, Any]) -> dict[str, Any]:
         "selector": primary,
         "as": as_name,
     }
-    # A "timeline" capture means the user marked an event list (e.g. a
-    # postal-tracking timeline). It compiles to a structured execute_script
-    # parser instead of a plain innerText extract — see
-    # compile_events_into_nodes.
-    if str(payload.get("capture_kind") or "").strip() == "timeline":
-        row["capture_kind"] = "timeline"
+    # An "area" capture means the user marked a whole region (a card, list,
+    # or panel). It compiles to a structured execute_script parser instead of
+    # a plain innerText extract — see compile_events_into_nodes.
+    # Accept the former "timeline" spelling as a rolling-deploy/backward-
+    # compatibility alias, but normalize all newly compiled rows to "area".
+    if str(payload.get("capture_kind") or "").strip() in {"area", "timeline"}:
+        row["capture_kind"] = "area"
     if fallback and fallback != primary:
         row["fallback_selector"] = fallback
     return row
+
+
+def _validate_compiled_rows(selectors: list[dict[str, Any]]) -> None:
+    """Fail closed before recorder output can persist secrets or broad captures."""
+    for row in selectors:
+        if row.get("_needs_vault"):
+            raise RecorderCompileError(
+                "Password fields must be replaced with a Password Vault reference before saving the recording."
+            )
+        if row.get("action") == "extract" and row.get("capture_kind") == "area":
+            selector = str(row.get("selector") or "").strip()
+            if not selector or selector.lower() in _ROOT_SELECTORS:
+                raise RecorderCompileError(
+                    "Capture area could not resolve a specific page region. Mark the area again before saving."
+                )
 
 
 def _attach_vault(
@@ -550,6 +570,7 @@ def compile_events(events: Iterable[RecordedEvent]) -> dict[str, Any]:
     selectors = _dedupe_focus_click_then_fill(selectors)
     selectors = _dedupe_consecutive_clicks(selectors)
     _captcha_value_targets(selectors)
+    _validate_compiled_rows(selectors)
 
     # Compute a reasonable timeout — sum of per-step timeouts with a
     # generous floor. The user can override in the config panel afterward.
@@ -711,9 +732,6 @@ def compile_events_into_nodes(events: Iterable[RecordedEvent]) -> list[dict[str,
                 })
 
     nodes: list[dict[str, Any]] = []
-    # The recorded tracking code (typed into the `objeto` input) parameterizes
-    # the timeline parser + the notification subject. Never hardcoded.
-    tracking_code = _tracking_code_from_rows(pruned_selectors)
 
     # First node: navigate (if we have an initial URL)
     if initial_url:
@@ -731,20 +749,19 @@ def compile_events_into_nodes(events: Iterable[RecordedEvent]) -> list[dict[str,
     for idx, row in enumerate(pruned_selectors):
         action = row.get("action") or "navigate"
 
-        # Structured "event timeline" capture → wait_for(root) +
-        # execute_script(parser). The wait_for always targets a concrete
-        # content selector (the marked root, or the Correios container as a
-        # fallback) so it never compiles to an empty selector that fails at
-        # replay. The execute_script returns the structured tracking object a
-        # downstream data_transform + notification template consume.
-        if action == "extract" and row.get("capture_kind") == "timeline":
-            # The marked selector is only trusted when it looks like a content
-            # region — on a captcha-gated page the timeline isn't rendered at
-            # record-time, so a marked point often resolves to chrome
-            # (carousel/footer). Fall back to the Correios container; the
-            # parser JS itself also falls back to document at runtime.
+        # Generic "Capture area" → wait_for(root) + execute_script(parser).
+        # The compiler preserves the concrete region the user marked. It must
+        # never substitute a provider-specific or document-wide fallback: that
+        # can either wedge a non-Correios replay or capture unrelated content.
+        if action == "extract" and row.get("capture_kind") == "area":
             marked = (row.get("selector") or "").strip()
-            root_sel = marked if _looks_like_result_region(marked) else "#tabs-rastreamento"
+            # ``compile_events`` validates this already; keep the guard local
+            # as defence in depth for future callers that split rows directly.
+            if not marked or marked.lower() in _ROOT_SELECTORS:
+                raise RecorderCompileError(
+                    "Capture area could not resolve a specific page region. Mark the area again before saving."
+                )
+            root_sel = marked
             wait_cfg = _node_base(profile, "wait_for", timeout=30)
             wait_cfg["selectors"] = [{
                 "action": "wait_for",
@@ -753,7 +770,7 @@ def compile_events_into_nodes(events: Iterable[RecordedEvent]) -> list[dict[str,
                 "timeout_ms": 30000,
             }]
             nodes.append({
-                "name": "wait_tracking_result",
+                "name": "wait_capture_region",
                 "type": "browser_automation",
                 "config_json": wait_cfg,
                 "timeout_seconds": 30,
@@ -761,12 +778,12 @@ def compile_events_into_nodes(events: Iterable[RecordedEvent]) -> list[dict[str,
             })
             es_cfg = _node_base(profile, "execute_script", timeout=60)
             es_cfg["selectors"] = {"extraction_root": root_sel}
-            es_cfg["output_alias"] = "extract_tracking"
+            es_cfg["output_alias"] = "capture_source"
             es_cfg["tool_arguments"] = {
-                "script": _timeline_parser_script(tracking_code, root_sel),
+                "script": _content_parser_script(root_sel),
             }
             nodes.append({
-                "name": "extract_tracking",
+                "name": "capture_source",
                 "type": "browser_automation",
                 "config_json": es_cfg,
                 "timeout_seconds": 60,
@@ -820,38 +837,40 @@ def compile_events_into_nodes(events: Iterable[RecordedEvent]) -> list[dict[str,
         })
 
     nodes = _combine_captcha_chain(nodes)
-    _wire_timeline_success_selector(nodes)
+    _wire_capture_success_selector(nodes)
     # Re-number positions after the combine
     for new_pos, n in enumerate(nodes, start=1):
         n["_recorder_position"] = new_pos
     return nodes
 
 
-def _wire_timeline_success_selector(nodes: list[dict[str, Any]]) -> None:
-    """Give the captcha solver a success_selector when a timeline follows it.
+def _wire_capture_success_selector(nodes: list[dict[str, Any]]) -> None:
+    """Give the captcha solver a success_selector when a capture follows it.
 
     Without one, `solve_captcha` OCRs + submits correctly but can't *confirm*
     the results loaded, so it reports a false-negative "CAPTCHA was not solved"
     and the run ends `completed_with_errors` even though everything worked. The
-    timeline root (`#tabs-rastreamento`, the same selector the wait_for/parser
-    target) only renders AFTER a successful search — verified: on a failed
-    captcha the wait_for for it times out — so it's a sound success barrier.
+    capture root (e.g. `#tabs-rastreamento`, the same selector the wait_for /
+    parser target) only renders AFTER a successful search — verified: on a
+    failed captcha the wait_for for it times out — so it's a sound success
+    barrier. Only fires when a `solve_captcha` actually precedes the capture
+    (captcha-gated pages); for an un-gated page it's a no-op.
     """
-    timeline_root: Optional[str] = None
+    capture_root: Optional[str] = None
     for n in nodes:
         cfg = n.get("config_json") or {}
-        if cfg.get("tool_action") == "execute_script" and cfg.get("output_alias") == "extract_tracking":
+        if cfg.get("tool_action") == "execute_script" and cfg.get("output_alias") == "capture_source":
             sels = cfg.get("selectors")
             if isinstance(sels, dict):
-                timeline_root = sels.get("extraction_root")
+                capture_root = sels.get("extraction_root")
             break
-    if not timeline_root:
+    if not capture_root:
         return
     for n in nodes:
         cfg = n.get("config_json") or {}
         if cfg.get("tool_action") == "solve_captcha":
             args = cfg.setdefault("tool_arguments", {})
-            args.setdefault("success_selector", timeline_root)
+            args.setdefault("success_selector", capture_root)
             break
 
 
@@ -1006,7 +1025,7 @@ def _combine_captcha_chain(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "timeout_ms": 30000,
             }]
             wait_for_node = {
-                "name": "wait_tracking_result",
+                "name": "wait_capture_region",
                 "type": "browser_automation",
                 "config_json": wait_cfg,
                 "timeout_seconds": 30,
@@ -1151,29 +1170,30 @@ def _action_screenshots(events: list[RecordedEvent]) -> list[Optional[str]]:
     return out
 
 
-def _build_tracking_trailing_nodes() -> list[dict[str, Any]]:
-    """Trailing data_transform for a timeline-capture recording.
+def _build_capture_trailing_nodes() -> list[dict[str, Any]]:
+    """Trailing data_transform for a "Capture area" recording.
 
-    Rides AFTER the browser group so the structured tracking object the
-    `execute_script` node returns is surfaced as a reusable flow variable —
-    `{{normalize_tracking.data_preview.*}}` (latest_status, latest_at,
-    latest_location, event_count, latest_event_key, tracking_code, …).
+    Rides AFTER the browser group so the region object the `execute_script`
+    node returns is surfaced as a reusable flow variable —
+    `{{capture.data_preview.*}}` (text, title, items, item_count, captured_at;
+    plus latest_status, latest_at, latest_location, event_count,
+    latest_event_key when the region held dated rows).
 
     The recorder deliberately does NOT emit a notification. Sending is a
     separate, first-class **Notification** flow step the user adds after the
     recording, referencing this variable (e.g.
-    `Status: {{normalize_tracking.data_preview.latest_status}}`). Keeping the
-    recorder to "produce + expose the data" and the flow step to "send it"
-    avoids duplicating the notification surface inside the recorder.
+    `{{capture.data_preview.text}}`). Keeping the recorder to "produce +
+    expose the data" and the flow step to "send it" avoids duplicating the
+    notification surface inside the recorder.
     """
     normalize = {
-        "name": "normalize_tracking",
+        "name": "capture",
         "type": "data_transform",
         "config_json": {
             "transform_mode": "json_path",
-            "source_step": "extract_tracking",
+            "source_step": "capture_source",
             "source_path": "metadata.result",
-            "output_alias": "normalize_tracking",
+            "output_alias": "capture",
         },
         "timeout_seconds": 15,
     }
@@ -1252,20 +1272,20 @@ def compile_events_into_group(
         "_recorder_position": 0,
     }
 
-    # When the recording captured a structured "event timeline", auto-wire a
-    # trailing `normalize_tracking` data_transform so the parsed object is
-    # exposed as a reusable flow variable (`normalize_tracking.data_preview.*`).
-    # It lives OUTSIDE the browser group (it isn't a browser step) and the
-    # caller inserts it after the children. Sending is NOT wired here — the
-    # user adds a first-class Notification step that references the variable.
-    has_timeline = any(
-        (c.get("config_json") or {}).get("output_alias") == "extract_tracking"
+    # When the recording captured a region ("Capture area"), auto-wire a
+    # trailing `capture` data_transform so the parsed object is exposed as a
+    # reusable flow variable (`capture.data_preview.*`). It lives OUTSIDE the
+    # browser group (it isn't a browser step) and the caller inserts it after
+    # the children. Sending is NOT wired here — the user adds a first-class
+    # Notification step that references the variable.
+    has_capture = any(
+        (c.get("config_json") or {}).get("output_alias") == "capture_source"
         and (c.get("config_json") or {}).get("tool_action") == "execute_script"
         for c in children
     )
     trailing_nodes: list[dict[str, Any]] = []
-    if has_timeline:
-        trailing_nodes = _build_tracking_trailing_nodes()
+    if has_capture:
+        trailing_nodes = _build_capture_trailing_nodes()
 
     return {
         "group_node": group_node,

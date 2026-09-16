@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — Browser Recorder capture safety and lifecycle hardening (2026-09-16)
+
+- **Generic Capture area.** Replaced the Correios-oriented **Capture timeline** control with **Capture area** for any card, list, panel, or results region. New recordings emit `capture_kind: "area"` while the compiler accepts the legacy `"timeline"` value for compatibility. The generated parser exposes `{{capture.data_preview.*}}` with `text`, `title`, `items`, `item_count`, `captured_at`, and `dedupe_key`; dated rows additionally expose `events`, `latest_status`, `latest_at`, `latest_location`, `event_count`, and `latest_event_key`.
+- **Bounded capture scope.** Structured parsing now stays inside the marked root, promoting a marked leaf only to its nearest explicit semantic card/panel/result/region. It never falls back to the document, a provider-specific container, or a sibling timeline, preventing unrelated page content from being swept into the capture. Missing and document-root selectors fail closed.
+- **Plaintext passwords fail closed.** All recorder compile shapes reject unresolved `_needs_vault` rows with a sanitized HTTP 422. The response never includes the captured value; valid `op://` and `pvh_` references continue to compile normally.
+- **Reliable auto-start and teardown.** The guided Browser Automation wizard now starts recording automatically after the URL stage. StrictMode cannot double-spawn a session, closing or unmounting invalidates in-flight creates, and any late-created backend session is deleted immediately so it cannot consume a tenant recorder slot.
+- **Regression coverage.** The focused recorder suite covers generic/dated regions in a real Playwright DOM, sibling and page-wide privacy boundaries, legacy marker compatibility, password-vault enforcement and sanitized API errors, and late-session lifecycle cleanup.
+
 ### Fixed — WhatsApp 405 `Client outdated` ingestion outage (2026-07-29)
 
 Voice notes and all other inbound WhatsApp messages stopped reaching Tsushin after WhatsApp rejected the runtime bridge with `Client outdated (405)`. The bridge REST process stayed alive, so Docker could look healthy while the WhatsApp socket repeatedly reconnected without authentication; media never reached the configured ASR provider.

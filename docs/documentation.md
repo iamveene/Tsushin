@@ -2077,9 +2077,9 @@ Record-and-refine authoring surface for `browser_automation` flow steps. Source:
 
 | Method | Path | Purpose |
 |---|---|---|
-| `POST` | `/api/recorder/sessions` | Spawn Chromium; returns `{session_id, ws_url}`. Cap is 2 active recordings per tenant — over the limit returns HTTP 409. Before enforcing the cap, `create()` reaps expired (30-min TTL) AND orphaned sessions (WebSocket relay detached + idle past a 90s grace, i.e. an abandoned tab) so a stale recording doesn't lock out new Starts (BUG-782). The UI shows a "Starting session… Ns" spinner during the ~60–90s cold start (BUG-781). |
-| `WS`   | `/ws/recorder/{session_id}` | Cookie-authed bidirectional stream. Server pushes `{type:"frame", data: <jpeg-b64>}` + `{type:"event", kind, payload}`. Client pushes `input.mouse`, `input.key`, `input.text`, `navigate`, `marker.captcha`, `marker.extract` (optional `capture_kind:"timeline"` → structured tracking parser), `marker.vault`, `ping`. |
-| `POST` | `/api/recorder/sessions/{id}/compile` | Optional body `{notify_recipient}`. Returns three parallel shapes: `config_json` (legacy single-FlowNode), `flow_nodes[]` (multi-FlowNode, one per browser action), and `flow_group = {group_node, child_nodes, trailing_nodes}` (the `browser_group` parent + annotated children, plus any non-browser trailing steps — e.g. a `normalize_tracking` data_transform + a `notification` — auto-wired when the recording captured a `timeline` marker and a recipient was supplied). The frontend `RecorderDialog` consumes `config_json`; programmatic consumers should prefer `flow_group`. |
+| `POST` | `/api/recorder/sessions` | Spawn Chromium; returns `{session_id, ws_url}`. Cap is 2 active recordings per tenant — over the limit returns HTTP 409. Before enforcing the cap, `create()` reaps expired (30-min TTL) AND orphaned sessions (WebSocket relay detached + idle past a 90s grace, i.e. an abandoned tab) so a stale recording doesn't lock out new Starts (BUG-782). The UI shows a "Starting session… Ns" spinner during the ~60–90s cold start (BUG-781). When the guided wizard already collected a URL, opening its recorder starts this request automatically; StrictMode is guarded against duplicate starts, and a response that arrives after close/unmount is deleted immediately. |
+| `WS`   | `/ws/recorder/{session_id}` | Cookie-authed bidirectional stream. Server pushes `{type:"frame", data: <jpeg-b64>}` + `{type:"event", kind, payload}`. Client pushes `input.mouse`, `input.key`, `input.text`, `navigate`, `marker.captcha`, `marker.extract` (optional `capture_kind:"area"` → structured region parser; legacy `"timeline"` is accepted and normalized), `marker.vault`, `ping`. |
+| `POST` | `/api/recorder/sessions/{id}/compile` | Returns three parallel shapes: `config_json` (legacy single-FlowNode), `flow_nodes[]` (multi-FlowNode, one per browser action), and `flow_group = {group_node, child_nodes, trailing_nodes}` (the `browser_group` parent + annotated children, plus non-browser trailing steps). A **Capture area** marker adds a `capture` data_transform exposing `{{capture.data_preview.*}}`; the recorder never adds a Notification. Unresolved plaintext-password rows or an unsafe document-root capture return a sanitized HTTP 422. The frontend `RecorderDialog` consumes `flow_group` when the caller supports group insertion and otherwise falls back to `config_json`. |
 | `POST` | `/api/recorder/sessions/{id}/agent` | Start a Browser-Use agent loop. Returns 503 if the tenant has no Anthropic `ProviderInstance` configured, 501 if `browser-use` isn't installed. |
 | `POST` | `/api/recorder/sessions/{id}/agent/pause` | Toggle pause/resume on the agent. Calls Browser-Use's native `pause()`/`resume()` plus the cooperative `agent_paused` flag. |
 | `GET`  | `/api/recorder/sessions/{id}/debug` | Live session introspection — events, agent task state, agent exception, current driver. UI-debuggable without server logs. |
@@ -2102,7 +2102,8 @@ A background janitor task (`backend/browser_recorder/session_manager.start_janit
   - **BUG-773** — the submit click is chosen via `_looks_like_submit` (button-like selectors / `pesquisar` / `consultar` / `submit` / `search` keywords) rather than the *first* click after the captcha marker (which was almost always the focus-click into the captcha input). Falls back to the first non-text-input click if no submit-like selector is present.
   - **BUG-774** — `success_selector` is only populated when the recorded extract selector matches a content-region pattern (`ship-step` / `result` / `tracking` / `rastreamento` / `evento` / `events` / `timeline` / `status-list` / `history`). Noise selectors (carousel, ads) are scrubbed so the captcha skill doesn't see a false success match before the page actually settles.
   - **BUG-776** — if no explicit `wait_for` was captured between submit and extract, the compiler auto-emits one targeting the extract's selector (when content-region). Mirrors the canonical `wait_tracking_result` shape from flow #33.
-- Password fields (`type="password"` or name/id matching `/password|passwd|pwd|pin|cvv/i`) emit a `_needs_vault` flag on the row when the value isn't already a `pvh_` or `op://` reference. The frontend disables the Save button until a vault row is picked, and the backend `/compile` rejects the call as defense in depth.
+- **Capture area:** `capture_kind:"area"` (plus the legacy `"timeline"` alias) compiles to `wait_capture_region` + `capture_source` (`execute_script`) and a trailing `capture` data transform. The parser is bound to the marked root and may promote only to the nearest explicit semantic card/panel/result/region; it never searches the whole document or borrows a sibling timeline. All regions return `text`, `title`, `items`, `item_count`, `captured_at`, and `dedupe_key`; dated rows additionally return `events`, `latest_status`, `latest_at`, `latest_location`, `event_count`, and `latest_event_key`.
+- Password fields (`type="password"` or name/id matching `/password|passwd|pwd|pin|cvv/i`) emit a `_needs_vault` flag on the row when the value isn't already a `pvh_` or `op://` reference. The ledger offers the Vault picker, and backend `/compile` rejects any unresolved row with a static HTTP 422 detail that never echoes the captured value.
 
 Selector strategy (`backend/browser_recorder/selector_strategy.pick_selector`) walks `data-testid` → `data-qa` → `data-cy` → `data-track` → `[name=…]` → `[type=submit]` → `[aria-label=…]` → `[role=…]` → `#id` → raw nth-of-type path. Returns `(primary, fallback)` so the runtime gets two shots.
 
@@ -2127,10 +2128,10 @@ Browser-Use's high-level Playwright actions (`go_to_url`, `click_element_by_inde
 
 | Component | File | Purpose |
 |---|---|---|
-| `RecorderDialog` | `frontend/app/flows/recorder/RecorderDialog.tsx` | Top-level Modal (size="2xl"). Manages session lifecycle, marker state, vault picker, agentic tab. |
+| `RecorderDialog` | `frontend/app/flows/recorder/RecorderDialog.tsx` | Top-level Modal (size="2xl"). Manages session lifecycle, marker state, vault picker, and agentic tab. In the guided wizard it auto-starts after URL collection, suppresses StrictMode duplicates, invalidates in-flight creates on close, and tears down late-created sessions. |
 | `StreamCanvas` | `frontend/app/flows/recorder/StreamCanvas.tsx` | `<canvas>` paint loop. Forwards pointer/keyboard events with viewport-coord scaling. Drag-to-mark overlay for captcha/extract markers. |
 | `StepLedger` | `frontend/app/flows/recorder/StepLedger.tsx` | Running list of captured rows. Yellow Vault chip on rows that look like passwords. |
-| `ToolPalette` | `frontend/app/flows/recorder/ToolPalette.tsx` | Mark captcha / Capture output / (optional) Inject vault tiles. |
+| `ToolPalette` | `frontend/app/flows/recorder/ToolPalette.tsx` | Mark captcha / Capture output / Capture area / (optional) Inject vault tiles. |
 | `AgenticTab` | `frontend/app/flows/recorder/AgenticTab.tsx` | Prompt input + start/pause/resume. Surfaces 501 (browser-use not installed) and 503 (no Anthropic provider for tenant) with concrete hints. |
 | `useRecorderSocket` | `frontend/app/flows/recorder/useRecorderSocket.ts` | WS client mirroring `lib/websocket.ts` cookie-auth pattern + exponential backoff. |
 | CTA mount | `frontend/app/flows/page.tsx:912` | The 🎬 Record button next to "+ Add selector" inside `BrowserAutomationConfigPanel`. |
@@ -2145,15 +2146,18 @@ Key behaviours:
 - **Session continuity:** every node gets `session_persistence: True` + `session_ttl_seconds: 1800`, with NO `browser_session_profile_name` set (the runtime keys sessions by tenant+agent within a FlowRun; setting a profile name would point at a non-existent stored profile and silently break the chain).
 - **Vault references travel with the owning node:** if a fill row references a `pvh_` or `op://` handle, the matching `browser_secret_references` entry rides with the FlowNode that contains that fill, with its `target` re-pointed to `selectors[0].value` (each node has one selector).
 
-The legacy single-FlowNode `compile_events()` is still exposed for the existing UI integration (`BrowserAutomationConfigPanel` overwrites one step's config). `POST /api/recorder/sessions/{id}/compile` returns both shapes:
+The legacy single-FlowNode `compile_events()` is still exposed for the existing UI integration (`BrowserAutomationConfigPanel` overwrites one step's config). `POST /api/recorder/sessions/{id}/compile` returns all three shapes:
 
 ```json
 {
   "config_json":  { ... legacy single-FlowNode ... },
   "flow_nodes":   [ ... new multi-FlowNode list ... ],
+  "flow_group":   { "group_node": { ... }, "child_nodes": [ ... ], "trailing_nodes": [ ... ] },
   "event_count":  N
 }
 ```
+
+For a **Capture area** recording, `flow_group.trailing_nodes` contains the `capture` data transform that exposes the parser result as `{{capture.data_preview.*}}`. It does not contain a notification; delivery remains an explicit flow-authoring choice.
 
 Validated end-to-end on prod ([flow #43](https://tsushin.archsec.io/flows): *Recorder Demo | Correios | AD468811215BR (canonical via compile_events_into_nodes)*) — 6 recorder-emitted FlowNodes + 2 hand-added (`data_transform normalize_tracking` + `notification notify_vini`), 14-second total runtime, canonical Correios tracking message delivered to `@Vini` on WhatsApp.
 
