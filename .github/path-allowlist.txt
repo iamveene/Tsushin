@@ -51,6 +51,10 @@ backend/dev_tests/asr_ptbr_benchmark.py
 frontend/**
 !frontend/**/.private/**
 
+# Electron desktop client — users build/install it from here.
+desktop/**
+!desktop/**/.private/**
+
 caddy/**
 proxy/**
 k8s/**

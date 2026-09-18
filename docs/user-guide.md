@@ -6,7 +6,7 @@ This guide walks you through using the Tsushin platform from a user's perspectiv
 
 ## Table of Contents
 
-1. [Getting Started](#1-getting-started)
+1. [Getting Started](#1-getting-started) — including the [Desktop App](#desktop-app-macos-windows-linux)
 2. [LLM Providers and Hub](#2-llm-providers-and-hub)
 3. [Creating and Configuring Agents](#3-creating-and-configuring-agents)
 3a. [Agent Teams](#3a-agent-teams)
@@ -46,6 +46,18 @@ If you're the administrator installing Tsushin for your organization, run `pytho
 - **Manual-cert pre-flight validation.** Key↔cert match, expiry window, SAN coverage, optional intermediate chain bundle support (resolves Sectigo/GoDaddy chain mismatches).
 
 Full installer reference, GKE/Helm, GCP Secret Manager, and `.env` details live in [documentation.md §3 Quick Start](documentation.md#3-quick-start) and [§4 Deployment & Operations](documentation.md#4-deployment--operations).
+
+### Desktop App (macOS, Windows, Linux)
+
+Tsushin also ships as a desktop app — a native window around the same Tsushin server, so it lives in your Dock/taskbar and keeps you signed in between launches instead of re-authenticating in a browser tab each day.
+
+1. Install it from the artifact for your platform (`.dmg` on macOS, `.exe` installer on Windows, `.AppImage`/`.deb` on Linux), or build it yourself: `cd desktop && npm install && npm run dist`.
+2. On first launch, the **Connect to Tsushin** screen asks for your server address — `tsushin.archsec.io`, `localhost`, or whatever URL your administrator gave you. Plain hostnames default to `https://`.
+3. Sign in exactly as you would in the browser, including **Sign in with Google** — the consent screen opens inside the app window.
+
+Useful menu items: **Tsushin → Server…** (`Cmd+,` / `Ctrl+,`) to point the app at a different server, and **Tsushin → Clear Session Data…** to sign out of the desktop app locally (your server and other sessions are untouched). Links to sites outside Tsushin open in your normal browser.
+
+macOS note: builds that are not signed with an Apple Developer ID are blocked by Gatekeeper when downloaded. Open them once with right-click → **Open**, or ask your administrator for a signed build. See `desktop/README.md`.
 
 ### First Login and Setup Wizard
 

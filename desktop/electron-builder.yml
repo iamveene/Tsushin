@@ -1,0 +1,64 @@
+appId: io.archsec.tsushin.desktop
+productName: Tsushin
+copyright: Copyright © Tsushin
+
+directories:
+  output: dist
+  buildResources: resources
+
+files:
+  - src/**/*
+  - package.json
+
+# Reproducible-ish metadata; keep the version in sync with frontend/package.json.
+electronLanguages:
+  - en
+  - pt-BR
+
+mac:
+  category: public.app-category.productivity
+  icon: resources/icon.png
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  # Required for notarization. Harmless on unsigned local builds.
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: resources/entitlements.mac.plist
+  entitlementsInherit: resources/entitlements.mac.plist
+  extendInfo:
+    NSCameraUsageDescription: Tsushin uses the camera when you start a video capture from the web app.
+    NSMicrophoneUsageDescription: Tsushin uses the microphone when you record a voice message.
+
+dmg:
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+win:
+  icon: resources/icon.png
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  shortcutName: Tsushin
+
+linux:
+  icon: resources/icon.png
+  category: Network
+  maintainer: Tsushin
+  target:
+    - AppImage
+    - deb
+
+publish: null
