@@ -1,0 +1,24 @@
+{
+  "name": "@tsushin/desktop",
+  "version": "0.7.0",
+  "productName": "Tsushin",
+  "description": "Tsushin Desktop - Electron shell for the agentic messaging OS",
+  "private": true,
+  "main": "src/main.js",
+  "author": "Tsushin",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "dev": "TSUSHIN_DESKTOP_DEV=1 electron .",
+    "icons": "node scripts/make-icons.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win",
+    "dist:linux": "electron-builder --linux"
+  },
+  "devDependencies": {
+    "electron": "^34.2.0",
+    "electron-builder": "^25.1.8"
+  }
+}

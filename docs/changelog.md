@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — Tsushin Desktop (Electron shell) (2026-09-18)
+
+New `desktop/` workspace: an Electron shell that renders an existing Tsushin server in a native window on macOS, Windows, and Linux. It bundles no frontend or backend code — the Next.js app stays same-origin with its backend, and the desktop app is packaging rather than a second deployment.
+
+- **Server picker.** First launch asks for a server address (bare hostnames default to `https://`); presets for production, the local compose stack, and `next dev`. Changeable later from **Tsushin → Server…** (`Cmd+,`), with **Clear Session Data…** for a local sign-out.
+- **Session persistence.** The httpOnly `tsushin_session` cookie survives quits, so the app does not re-prompt for login on every launch.
+- **OAuth stays in the shell.** `loginWithGoogle()` performs a top-level navigation to `accounts.google.com`; an allowlist of identity-provider hosts keeps that flow in-window so the callback sets the session cookie in the right browser, and the user agent is normalized to plain Chrome because Google rejects OAuth from Electron user agents. Every other external host opens in the system browser.
+- **Hardened renderer.** `contextIsolation` on, `nodeIntegration` off, sandbox on, `<webview>` attachment blocked, and camera/microphone/notification permissions granted only to the configured origin. Self-signed certificates are accepted for loopback hostnames only.
+- **Packaging.** `electron-builder` targets dmg/zip (arm64 + x64), NSIS, AppImage, and deb, with hardened-runtime entitlements ready for Developer ID signing and notarization. Unsigned builds are ad-hoc signed and run locally; distributing to other Macs without Gatekeeper warnings requires an Apple Developer Program membership ($99/year). See `desktop/README.md`.
+
 ### Fixed — Browser Recorder capture safety and lifecycle hardening (2026-09-16)
 
 - **Generic Capture area.** Replaced the Correios-oriented **Capture timeline** control with **Capture area** for any card, list, panel, or results region. New recordings emit `capture_kind: "area"` while the compiler accepts the legacy `"timeline"` value for compatibility. The generated parser exposes `{{capture.data_preview.*}}` with `text`, `title`, `items`, `item_count`, `captured_at`, and `dedupe_key`; dated rows additionally expose `events`, `latest_status`, `latest_at`, `latest_location`, `event_count`, and `latest_event_key`.
